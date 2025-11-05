@@ -81,9 +81,9 @@ async function startScanner(tg, logger) {
 
   // Optional on-chain PairCreated listener (real-time detection with auto-reconnect)
   (function enablePairCreatedListener() {
-    const factoryAddr = process.env.PANCake_FACTORY;
+    const factoryAddr = process.env.PANCAKE_FACTORY;
     if (!factoryAddr) {
-      if (logger && logger.warn) logger.warn('PANCake_FACTORY not set — skipping on-chain PairCreated listener');
+      if (logger && logger.warn) logger.warn('PANCAKE_FACTORY not set — skipping on-chain PairCreated listener');
       return;
     }
 
