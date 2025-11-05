@@ -29,5 +29,11 @@ app.get('/dashboard', (req, res) => {
   }
 });
 
+import axios from "axios";
+axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+  chat_id: process.env.TELEGRAM_CHAT_ID,
+  text: "🚀 Bot deployed successfully and is now live on Render!",
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, ()=> logger.info(`HTTP server listening ${PORT}`));
