@@ -29,7 +29,7 @@ app.get('/dashboard', (req, res) => {
   }
 });
 
-import axios from "axios";
+const axios = require("axios");
 axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
   chat_id: process.env.TELEGRAM_CHAT_ID,
   text: "🚀 Bot deployed successfully and is now live on Render!",
