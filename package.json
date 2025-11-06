@@ -1,7 +1,6 @@
 {
   "name": "telegram-memecoin-scanner-full",
   "version": "0.5.0",
-  "type": "module",
   "main": "src/index.js",
   "private": true,
   "scripts": {
