@@ -80,7 +80,10 @@ async function initTelegram() {
           honeypot ? '⚠️ YES' : '✅ NO'
         }`;
 
-        const payload = Buffer.from(JSON.stringify(raw || {})).toString('base64');
+        // Safely convert BigInt to string for Telegram serialization
+const payload = Buffer.from(JSON.stringify(raw || {}, (_, v) =>
+  typeof v === 'bigint' ? v.toString() : v
+)).toString('base64');
         const buyCb = `buy_${payload}`;
         const ignoreCb = `ignore_${pair}`;
         const watchCb = `watch_${pair}`;
