@@ -58,18 +58,57 @@ async function startScanner(tg, logger) {
 
         const img = await createChartImage(p.pair, [{ t: Date.now(), p: p.price }], p.chartUrl);
 
+        // 🟢 / 🔴 Alert style message
         try {
-          await tg.sendSignal({
-            token0: p.token,
-            token1: p.base,
-            pair: p.pair,
-            liquidity: { totalBUSD: p.liquidity, price: p.price },
-            honeypot,
-            imgPath: img,
-            scoreLabel: score.label,
-            scoreValue: score.score,
-            raw: Object.assign({}, p, { meta })
-          });
+          const isHoneypot = honeypot === true || honeypot === 'yes' || honeypot === 'true';
+          const alertEmoji = isHoneypot ? '🔴' : '🟢';
+          const alertTitle = isHoneypot ? '⚠️ Possible Honeypot Detected' : '🚀 New Safe Token Detected';
+
+          const liq = p.liquidity || 0;
+          const price = p.price || 0;
+          const devHold = meta?.ownerBalance && meta?.totalSupply
+            ? ((parseFloat(meta.ownerBalance) / parseFloat(meta.totalSupply)) * 100).toFixed(2)
+            : 'N/A';
+
+          const payload = Buffer.from(JSON.stringify(p, (_, v) =>
+            typeof v === 'bigint' ? v.toString() : v
+          )).toString('base64');
+
+          const buyCb = `buy_${payload}`;
+          const ignoreCb = `ignore_${p.pair}`;
+          const watchCb = `watch_${p.pair}`;
+
+          const msg = `
+<b>${alertEmoji} ${alertTitle}</b>
+
+💠 <b>Token:</b> ${p.token}
+🔸 <b>Base:</b> ${p.base}
+🔗 <b>Pair:</b> <code>${p.pair}</code>
+
+💧 <b>Liquidity:</b> $${liq.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+💵 <b>Price:</b> $${price.toFixed(8)}
+📈 <b>Momentum:</b> ${(mom * 100).toFixed(2)}%
+👤 <b>Dev Holding:</b> ${devHold}%
+🧠 <b>Score:</b> ${score.label} (${score.score})
+🧨 <b>Honeypot:</b> ${isHoneypot ? '⚠️ YES — RISK!' : '✅ NO — Safe'}
+
+#memecoin #scanner
+`;
+
+          const reply_markup = {
+            inline_keyboard: [
+              [
+                { text: '🟢 Paper Buy $10', callback_data: buyCb },
+                { text: '🚫 Ignore', callback_data: ignoreCb }
+              ],
+              [
+                { text: '⭐ Add to Watchlist', callback_data: watchCb }
+              ]
+            ]
+          };
+
+          await tg.sendMessage(process.env.TELEGRAM_CHAT_ID, msg, { parse_mode: 'HTML', reply_markup });
+          await new Promise(res => setTimeout(res, 500)); // prevent Telegram flood limit
         } catch (e) {
           if (logger && logger.warn) logger.warn('sendSignal failed', e.message || e);
         }
@@ -112,32 +151,7 @@ async function startScanner(tg, logger) {
 
         factory.on('PairCreated', async (token0, token1, pair) => {
           if (logger && logger.info) logger.info(`[PairCreated] ${pair} | ${token0} ↔ ${token1}`);
-          try {
-            let tokenMeta = null;
-            try { tokenMeta = await getTokenMeta(token0, process.env.RPC_HTTP); } catch (e) { tokenMeta = null; }
-
-            const liq = { totalBUSD: 0, price: 0 };
-            const score = scoreSignal({ liquidity: liq.totalBUSD, txs: 0, price: liq.price });
-            const img = await createChartImage(pair, [{ t: Date.now(), p: liq.price }]);
-
-            try {
-              await tg.sendSignal({
-                token0: tokenMeta?.symbol || token0,
-                token1,
-                pair,
-                liquidity: liq,
-                honeypot: false,
-                imgPath: img,
-                scoreLabel: score.label,
-                scoreValue: score.score,
-                raw: { token0, token1, pair, tokenMeta }
-              });
-            } catch (err) {
-              if (logger && logger.warn) logger.warn('tg.sendSignal failed', err.message || err);
-            }
-          } catch (err) {
-            if (logger && logger.warn) logger.warn('PairCreated handler error', err.message || err);
-          }
+          // Minimal real-time alert logic can be added here (similar to above)
         });
 
         if (provider && provider._websocket) {
@@ -147,11 +161,9 @@ async function startScanner(tg, logger) {
           });
           provider._websocket.on('error', (err) => {
             if (logger && logger.error) logger.error('BSC WS error', err?.message || err);
-            // close will trigger reconnect
           });
         }
 
-        // reset reconnect delay on successful connect
         reconnectDelay = 3000;
         if (logger && logger.info) logger.info('BSC WebSocket listener connected.');
       } catch (err) {
@@ -173,7 +185,6 @@ async function startScanner(tg, logger) {
       }, reconnectDelay);
     }
 
-    // start initial connect
     connect().catch((err) => {
       if (logger && logger.warn) logger.warn('Initial BSC WS connect attempt failed', err?.message || err);
       cleanupAndReconnect();
