@@ -16,8 +16,10 @@ async function initTelegram() {
 
   bot = new Telegraf(BOT_TOKEN);
 
-  bot.start(ctx => ctx.reply('Memecoin Scanner PRO connected ✅'));
+  // 🟢 Startup Greeting
+  bot.start(ctx => ctx.reply('🤖 Memecoin Scanner PRO connected and ready ✅'));
 
+  // 🔧 Error handler
   bot.catch((err, ctx) => {
     console.error('[Telegram Error]', err);
     if (ctx?.update?.message) {
@@ -25,44 +27,49 @@ async function initTelegram() {
     }
   });
 
-  // ---- Commands & Actions ----
+  // 🛒 Paper Buy Handler
   bot.action(/buy_(.+)/, async ctx => {
     try {
       const payload = JSON.parse(Buffer.from(ctx.match[1], 'base64').toString('utf8'));
       const amount = 10;
       const res = await paperBuy(payload, amount);
-      await ctx.answerCbQuery(res.ok ? `Paper buy executed $${amount}` : `Buy failed: ${res.reason}`);
-    } catch {
-      await ctx.answerCbQuery('Buy error');
+      await ctx.answerCbQuery(res.ok ? `✅ Paper buy executed: $${amount}` : `❌ Buy failed: ${res.reason}`);
+    } catch (err) {
+      console.error('Buy error:', err.message);
+      await ctx.answerCbQuery('⚠️ Buy error');
     }
   });
 
+  // 💸 Paper Sell Handler
   bot.action(/sell_(\d+)/, async ctx => {
     const id = parseInt(ctx.match[1]);
     const res = await paperSell(id);
-    await ctx.answerCbQuery(res.ok ? 'Paper sell executed' : 'Sell failed');
+    await ctx.answerCbQuery(res.ok ? '✅ Paper sell executed' : '❌ Sell failed');
   });
 
-  bot.action(/ignore_(.+)/, async ctx => await ctx.answerCbQuery('Ignored'));
-  bot.action(/watch_(.+)/, async ctx => await ctx.answerCbQuery('Added to watchlist (prototype)'));
+  // ⚙️ Utility Handlers
+  bot.action(/ignore_(.+)/, async ctx => await ctx.answerCbQuery('🚫 Ignored'));
+  bot.action(/watch_(.+)/, async ctx => await ctx.answerCbQuery('⭐ Added to watchlist (prototype)'));
 
+  // 💰 Balance Command
   bot.command('balance', async ctx => {
     const db = load();
-    await ctx.reply(`Paper Balance: $${(db.balance || 0).toFixed(2)}`);
+    await ctx.reply(`💵 Paper Balance: $${(db.balance || 0).toFixed(2)}`);
   });
 
+  // 📊 Digest Command
   bot.command('digest', async ctx => {
     const db = require('./papertrader').load();
     const top =
       db.trades
         .slice(-10)
         .reverse()
-        .map(t => `${t.side.toUpperCase()} ${t.token} $${(t.usd || 0).toFixed(2)}`)
-        .join('\n') || 'none';
-    await ctx.reply(`Recent trades:\n${top}`);
+        .map(t => `${t.side.toUpperCase()} ${t.token} — $${(t.usd || 0).toFixed(2)}`)
+        .join('\n') || 'No trades yet';
+    await ctx.reply(`📋 Recent Trades:\n${top}`);
   });
 
-  // ---- Launch Mode ----
+  // 🚀 Launch Bot
   try {
     if (process.env.RENDER === 'true' && process.env.RENDER_EXTERNAL_URL) {
       const domain = process.env.RENDER_EXTERNAL_URL;
@@ -84,19 +91,42 @@ async function initTelegram() {
     console.error('❌ Telegram launch failed:', err);
   }
 
-  // ---- Send Signal ----
+  // 🛰 Enhanced Send Signal Function
   return {
     sendSignal: async ({ token0, token1, pair, liquidity, honeypot, imgPath, scoreLabel, scoreValue, raw }) => {
       try {
         if (!CHAT_ID) throw new Error('TELEGRAM_CHAT_ID missing');
 
-        const msg = `⚡ <b>New Token Detected</b>\nToken: ${token0}\nBase: ${token1}\nPair: ${pair}\nLiquidity: $${(
-          (liquidity?.totalBUSD) || 0
-        ).toLocaleString()}\nPrice(USD): ${(liquidity?.price || 0)}\nPotential: ${scoreLabel} (${scoreValue})\nHoneypot: ${
-          honeypot ? '⚠️ YES' : '✅ NO'
-        }`;
+        // 🟢 or 🔴 Alert Style Based on Honeypot Status
+        const isHoneypot = honeypot === true || honeypot === 'yes' || honeypot === 'true';
+        const alertEmoji = isHoneypot ? '🔴' : '🟢';
+        const alertTitle = isHoneypot ? '⚠️ Possible Honeypot Detected' : '🚀 New Safe Token Detected';
 
-        // Safely handle BigInt before serializing
+        const liq = liquidity?.totalBUSD || 0;
+        const price = liquidity?.price || 0;
+        const devHold =
+          raw?.meta?.ownerBalance && raw?.meta?.totalSupply
+            ? ((parseFloat(raw.meta.ownerBalance) / parseFloat(raw.meta.totalSupply)) * 100).toFixed(2)
+            : 'N/A';
+
+        const msg = `
+<b>${alertEmoji} ${alertTitle}</b>
+
+💠 <b>Token:</b> ${token0}
+🔸 <b>Base:</b> ${token1}
+🔗 <b>Pair:</b> <code>${pair}</code>
+
+💧 <b>Liquidity:</b> $${liq.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+💵 <b>Price:</b> $${price.toFixed(8)}
+📈 <b>Momentum:</b> ${(raw?.momentum * 100 || 0).toFixed(2)}%
+👤 <b>Dev Holding:</b> ${devHold}%
+🧠 <b>Score:</b> ${scoreLabel} (${scoreValue})
+🧨 <b>Honeypot:</b> ${isHoneypot ? '⚠️ YES — RISK!' : '✅ NO — Safe'}
+
+#memecoin #scanner
+`;
+
+        // Encode payload safely
         const payload = Buffer.from(
           JSON.stringify(raw || {}, (_, v) => (typeof v === 'bigint' ? v.toString() : v))
         ).toString('base64');
@@ -104,35 +134,31 @@ async function initTelegram() {
         const ignoreCb = `ignore_${pair}`;
         const watchCb = `watch_${pair}`;
 
-        const keyboard = {
-          parse_mode: 'HTML',
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: 'Paper Buy $10', callback_data: buyCb },
-                { text: 'Ignore', callback_data: ignoreCb },
-              ],
-              [{ text: 'Add to Watchlist', callback_data: watchCb }],
+        const reply_markup = {
+          inline_keyboard: [
+            [
+              { text: '🟢 Paper Buy $10', callback_data: buyCb },
+              { text: '🚫 Ignore', callback_data: ignoreCb },
             ],
-          },
+            [{ text: '⭐ Add to Watchlist', callback_data: watchCb }],
+          ],
         };
 
+        // ✅ Send message with image if available
         if (imgPath && fs.existsSync(imgPath)) {
-          try {
-            await bot.telegram.sendPhoto(CHAT_ID, { source: fs.createReadStream(imgPath) }, {
-              caption: msg,
-              parse_mode: 'HTML',
-              reply_markup: keyboard.reply_markup,
-            });
-            console.log('✅ Signal sent with image');
-          } catch (imgErr) {
-            console.warn('⚠️ Image send failed, falling back to text:', imgErr.message);
-            await bot.telegram.sendMessage(CHAT_ID, msg, keyboard);
-          }
+          await bot.telegram.sendPhoto(
+            CHAT_ID,
+            { source: fs.createReadStream(imgPath) },
+            { caption: msg, parse_mode: 'HTML', reply_markup }
+          );
+          console.log('✅ Signal sent with image');
         } else {
-          await bot.telegram.sendMessage(CHAT_ID, msg, keyboard);
+          await bot.telegram.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML', reply_markup });
           console.log('✅ Signal sent (no image)');
         }
+
+        // prevent flood limit
+        await new Promise(res => setTimeout(res, 500));
       } catch (error) {
         console.error('❌ tg.sendSignal failed:', error.message);
       }
