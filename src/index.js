@@ -46,18 +46,26 @@ async function initTelegram() {
 
   // ---- Commands ----
   bot.command('balance', async ctx => {
-    const db = load();
-    await ctx.reply(`Paper Balance: $${(db.balance || 0).toFixed(2)}`);
+    try {
+      const db = load();
+      await ctx.reply(`Paper Balance: $${(db.balance || 0).toFixed(2)}`);
+    } catch (err) {
+      console.error('Balance command error:', err.message);
+    }
   });
 
   bot.command('digest', async ctx => {
-    const db = load();
-    const top = db.trades
-      .slice(-10)
-      .reverse()
-      .map(t => `${t.side.toUpperCase()} ${t.token} $${(t.usd || 0).toFixed(2)}`)
-      .join('\n') || 'none';
-    await ctx.reply(`Recent trades:\n${top}`);
+    try {
+      const db = load();
+      const top = db.trades
+        .slice(-10)
+        .reverse()
+        .map(t => `${t.side.toUpperCase()} ${t.token} $${(t.usd || 0).toFixed(2)}`)
+        .join('\n') || 'none';
+      await ctx.reply(`Recent trades:\n${top}`);
+    } catch (err) {
+      console.error('Digest command error:', err.message);
+    }
   });
 
   // ---- Launch Bot ----
@@ -119,9 +127,17 @@ async function initTelegram() {
         ]);
 
         if (imgPath && fs.existsSync(imgPath)) {
-          await bot.telegram.sendPhoto(CHAT_ID, { source: fs.createReadStream(imgPath) }, { caption: msg, parse_mode: 'HTML', reply_markup: keyboard.reply_markup });
+          await bot.telegram.sendPhoto(
+            CHAT_ID,
+            { source: fs.createReadStream(imgPath) },
+            { caption: msg, parse_mode: 'HTML', reply_markup: keyboard.reply_markup }
+          );
         } else {
-          await bot.telegram.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML', reply_markup: keyboard.reply_markup });
+          await bot.telegram.sendMessage(
+            CHAT_ID,
+            msg,
+            { parse_mode: 'HTML', reply_markup: keyboard.reply_markup }
+          );
         }
 
         await new Promise(res => setTimeout(res, 500)); // prevent Telegram flood
