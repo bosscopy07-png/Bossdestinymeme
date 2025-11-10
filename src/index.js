@@ -2,6 +2,7 @@ const { Telegraf, Markup } = require('telegraf');
 const fs = require('fs');
 const dotenv = require('dotenv');
 const { paperBuy, paperSell, load } = require('./papertrader');
+const express = require('express'); // 🧩 Added for Render keep-alive
 
 dotenv.config(); // Load environment variables
 
@@ -147,6 +148,17 @@ async function initTelegram() {
       }
     }
   };
+}
+
+// --- Keep-alive server for Render ---
+if (process.env.RENDER === 'true') {
+  const app = express();
+  const port = process.env.PORT || 10000;
+
+  app.get('/', (req, res) => res.send('Boss Destiny Bot is Live ✅'));
+  app.get('/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
+
+  app.listen(port, () => console.log(`🌐 Keep-alive server running on port ${port}`));
 }
 
 module.exports = { initTelegram };
