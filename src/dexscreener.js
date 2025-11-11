@@ -6,7 +6,7 @@ const DEFAULT_LIMIT = parseInt(process.env.DEXSCR_LIMIT || '80');
 const MIN_VALID_LIQUIDITY = parseFloat(process.env.MIN_LIQ_USD || '5');
 const RETRY_DELAY_MS = 4000;
 const MAX_RETRIES = 3;
-const BASE_URL = `https://api.dexscreener.com/latest/dex/tokens?chain=${CHAIN}`;
+const BASE_URL = `https://api.dexscreener.com/latest/dex/tokens`;
 
 function safeFloat(val, def = 0) {
   const f = parseFloat(val);
