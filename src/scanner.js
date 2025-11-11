@@ -1,195 +1,92 @@
 // src/scanner.js
 const { fetchTrendingPairs } = require('./dexscreener');
-const { createChartImage, honeypotCheck, getTokenMeta, scoreSignal } = require('./utils');
-const { ethers } = require('ethers');
+const { initTelegram } = require('./telegram');
+const Web3 = require('web3');
+const dotenv = require('dotenv');
+dotenv.config();
 
-const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL || '7000');
-const MIN_LIQ = parseFloat(process.env.MIN_LIQ_BUSD || '10');
+const FACTORY = process.env.PANCAKE_FACTORY; // PancakeSwap Factory address
+const RPC_HTTP = process.env.RPC_HTTP;       // BSC RPC
+const BSC_WS = process.env.BSC_WS;           // optional WebSocket
+const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL || '60000');
+const MIN_LIQ_BUSD = parseFloat(process.env.MIN_LIQ_BUSD || '30');
+const MIN_TXS = parseInt(process.env.MIN_TXS || '5');
+const MOMENTUM_MIN = parseFloat(process.env.MOMENTUM_MIN || '0.05');
+const MAX_DEV_SHARE = parseFloat(process.env.MAX_DEV_SHARE || '0.6');
 
-let seen = new Set();
-let momentum = {};
+let seenPairs = new Set();
+let tgBot;
 
-/**
- * startScanner(tg, logger)
- * - tg: object returned from initTelegram() (has sendSignal)
- * - logger: a logger (winston) instance
- */
-async function startScanner(tg, logger) {
-  // Dexscreener polling
+async function initScanner(bot) {
+  tgBot = bot;
+  console.log('🛰 Initializing Hybrid Memecoin Scanner...');
+
+  // --- 1. On-chain PairCreated listener for NEW tokens ---
+  if (BSC_WS) {
+    const web3ws = new Web3(new Web3.providers.WebsocketProvider(BSC_WS));
+    const factoryContract = new web3ws.eth.Contract(
+      [{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"token0","type":"address"},{"indexed":true,"internalType":"address","name":"token1","type":"address"},{"indexed":true,"internalType":"address","name":"pair","type":"address"},{"indexed":false,"internalType":"uint256","name":"","type":"uint256"}],"name":"PairCreated","type":"event"}],
+      FACTORY
+    );
+
+    factoryContract.events.PairCreated()
+      .on('data', async event => {
+        const token0 = event.returnValues.token0;
+        const token1 = event.returnValues.token1;
+        const pair = event.returnValues.pair;
+
+        if (seenPairs.has(pair)) return;
+        seenPairs.add(pair);
+
+        // Quick meta check
+        const liquidity = { totalBUSD: 0, price: 0 }; // optional: add RPC call to get real liquidity
+        const raw = {}; // add raw token info if needed
+        const honeypot = false; // optional: call honeypot checker
+        const scoreLabel = 'New';
+        const scoreValue = 100;
+
+        console.log(`🔹 New pair detected: ${token0}/${token1} (${pair})`);
+        await tgBot.sendSignal({ token0, token1, pair, liquidity, honeypot, scoreLabel, scoreValue, raw });
+      })
+      .on('error', err => console.error('PairCreated listener error:', err));
+  } else {
+    console.warn('⚠️ BSC_WS not configured — PairCreated listener disabled');
+  }
+
+  // --- 2. DexScreener polling for existing token momentum ---
   setInterval(async () => {
-    try {
-      const pairs = await fetchTrendingPairs();
-      for (const p of pairs) {
-        const key = p.pair || `${p.token}_${p.price}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
+    const pairs = await fetchTrendingPairs();
 
-        if (p.liquidity && p.liquidity < MIN_LIQ) {
-          if (logger && logger.info) logger.info('skip low liq', key);
-          continue;
-        }
+    for (const p of pairs) {
+      if (seenPairs.has(p.pair)) continue; // skip already alerted tokens
 
-        // token metadata
-        let meta = null;
-        if (p.tokenAddress && process.env.RPC_HTTP) {
-          try { meta = await getTokenMeta(p.tokenAddress, process.env.RPC_HTTP); } catch (e) { meta = null; }
-        }
+      // Calculate a simple score / filter
+      const devShare = p.devShare || 0; // if available from metadata
+      if (p.liquidity < MIN_LIQ_BUSD && !(p.txs >= MIN_TXS && p.price * MOMENTUM_MIN > 0)) continue;
+      if (devShare > MAX_DEV_SHARE) continue;
 
-        // compute dev share if meta available
-        let devShare = 0;
-        if (meta && meta.owner && meta.ownerBalance && meta.totalSupply) {
-          try { devShare = parseFloat(meta.ownerBalance) / parseFloat(meta.totalSupply); } catch (e) { devShare = 0; }
-        }
+      seenPairs.add(p.pair);
 
-        // momentum: naive compare with previous price
-        let mom = 0;
-        try {
-          if (momentum[p.pair]) { mom = (p.price - momentum[p.pair]) / (momentum[p.pair] || p.price || 1); }
-        } catch (e) { mom = 0; }
-        momentum[p.pair] = p.price;
+      const raw = p; // pass the full pair object
+      const scoreLabel = 'Momentum';
+      const scoreValue = Math.round((p.liquidity + (p.volume24h || 0)) / 1000);
 
-        const score = scoreSignal({ liquidity: p.liquidity, txs: p.txs || 0, price: p.price, devShare, momentum: mom });
-
-        // honeypot check
-        let honeypot = false;
-        if (process.env.RPC_HTTP && p.baseAddress && p.tokenAddress) {
-          try { honeypot = await honeypotCheck(p.tokenAddress, p.baseAddress, process.env.RPC_HTTP); } catch (e) { honeypot = false; }
-        }
-
-        const img = await createChartImage(p.pair, [{ t: Date.now(), p: p.price }], p.chartUrl);
-
-        // 🟢 / 🔴 Alert style message
-        try {
-          const isHoneypot = honeypot === true || honeypot === 'yes' || honeypot === 'true';
-          const alertEmoji = isHoneypot ? '🔴' : '🟢';
-          const alertTitle = isHoneypot ? '⚠️ Possible Honeypot Detected' : '🚀 New Safe Token Detected';
-
-          const liq = p.liquidity || 0;
-          const price = p.price || 0;
-          const devHold = meta?.ownerBalance && meta?.totalSupply
-            ? ((parseFloat(meta.ownerBalance) / parseFloat(meta.totalSupply)) * 100).toFixed(2)
-            : 'N/A';
-
-          const payload = Buffer.from(JSON.stringify(p, (_, v) =>
-            typeof v === 'bigint' ? v.toString() : v
-          )).toString('base64');
-
-          const buyCb = `buy_${payload}`;
-          const ignoreCb = `ignore_${p.pair}`;
-          const watchCb = `watch_${p.pair}`;
-
-          const msg = `
-<b>${alertEmoji} ${alertTitle}</b>
-
-💠 <b>Token:</b> ${p.token}
-🔸 <b>Base:</b> ${p.base}
-🔗 <b>Pair:</b> <code>${p.pair}</code>
-
-💧 <b>Liquidity:</b> $${liq.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-💵 <b>Price:</b> $${price.toFixed(8)}
-📈 <b>Momentum:</b> ${(mom * 100).toFixed(2)}%
-👤 <b>Dev Holding:</b> ${devHold}%
-🧠 <b>Score:</b> ${score.label} (${score.score})
-🧨 <b>Honeypot:</b> ${isHoneypot ? '⚠️ YES — RISK!' : '✅ NO — Safe'}
-
-#memecoin #scanner
-`;
-
-          const reply_markup = {
-            inline_keyboard: [
-              [
-                { text: '🟢 Paper Buy $10', callback_data: buyCb },
-                { text: '🚫 Ignore', callback_data: ignoreCb }
-              ],
-              [
-                { text: '⭐ Add to Watchlist', callback_data: watchCb }
-              ]
-            ]
-          };
-
-          await tg.sendMessage(process.env.TELEGRAM_CHAT_ID, msg, { parse_mode: 'HTML', reply_markup });
-          await new Promise(res => setTimeout(res, 500)); // prevent Telegram flood limit
-        } catch (e) {
-          if (logger && logger.warn) logger.warn('sendSignal failed', e.message || e);
-        }
-      }
-    } catch (e) {
-      if (logger && logger.warn) logger.warn('poll err', e.message || e.toString());
+      console.log(`📈 Momentum alert: ${p.token}/${p.base} — $${p.liquidity}`);
+      await tgBot.sendSignal({
+        token0: p.token,
+        token1: p.base,
+        pair: p.pair,
+        liquidity: { totalBUSD: p.liquidity, price: p.price },
+        honeypot: false,
+        scoreLabel,
+        scoreValue,
+        raw,
+        imgPath: null
+      });
     }
   }, POLL_INTERVAL);
 
-  // Optional on-chain PairCreated listener (real-time detection with auto-reconnect)
-  (function enablePairCreatedListener() {
-    const factoryAddr = process.env.PANCAKE_FACTORY;
-    if (!factoryAddr) {
-      if (logger && logger.warn) logger.warn('PANCAKE_FACTORY not set — skipping on-chain PairCreated listener');
-      return;
-    }
-
-    const wsFromEnv = process.env.BSC_WS;
-    const rpcHttp = process.env.RPC_HTTP || process.env.BSC_RPC || null;
-    const derivedWs = rpcHttp ? rpcHttp.replace(/^http/, 'wss') : null;
-    const WS_URL = wsFromEnv || derivedWs;
-
-    if (!WS_URL) {
-      if (logger && logger.warn) logger.warn('No WebSocket URL available (set BSC_WS or RPC_HTTP). Skipping on-chain listener.');
-      return;
-    }
-
-    let provider = null;
-    let factory = null;
-    let reconnectDelay = 3000; // start 3s
-    const MAX_DELAY = 60000; // cap 60s
-
-    async function connect() {
-      try {
-        if (logger && logger.info) logger.info(`Attempting BSC WS connect -> ${WS_URL}`);
-        provider = new ethers.WebSocketProvider(WS_URL);
-
-        const factoryAbi = ['event PairCreated(address indexed token0, address indexed token1, address pair, uint)'];
-        factory = new ethers.Contract(factoryAddr, factoryAbi, provider);
-
-        factory.on('PairCreated', async (token0, token1, pair) => {
-          if (logger && logger.info) logger.info(`[PairCreated] ${pair} | ${token0} ↔ ${token1}`);
-          // Minimal real-time alert logic can be added here (similar to above)
-        });
-
-        if (provider && provider._websocket) {
-          provider._websocket.on('close', (code) => {
-            if (logger && logger.warn) logger.warn(`BSC WS closed (code=${code}). Scheduling reconnect in ${reconnectDelay}ms.`);
-            cleanupAndReconnect();
-          });
-          provider._websocket.on('error', (err) => {
-            if (logger && logger.error) logger.error('BSC WS error', err?.message || err);
-          });
-        }
-
-        reconnectDelay = 3000;
-        if (logger && logger.info) logger.info('BSC WebSocket listener connected.');
-      } catch (err) {
-        if (logger && logger.warn) logger.warn('BSC WS connect failed:', err?.message || err);
-        cleanupAndReconnect();
-      }
-    }
-
-    function cleanupAndReconnect() {
-      try { if (factory && typeof factory.removeAllListeners === 'function') factory.removeAllListeners(); } catch (e) {}
-      try { if (provider && provider._websocket) provider._websocket.terminate(); } catch (e) {}
-      try { if (provider && typeof provider.destroy === 'function') provider.destroy(); } catch (e) {}
-      provider = null;
-      factory = null;
-
-      setTimeout(() => {
-        reconnectDelay = Math.min(MAX_DELAY, Math.floor(reconnectDelay * 1.8));
-        connect().catch(() => {});
-      }, reconnectDelay);
-    }
-
-    connect().catch((err) => {
-      if (logger && logger.warn) logger.warn('Initial BSC WS connect attempt failed', err?.message || err);
-      cleanupAndReconnect();
-    });
-  })();
+  console.log('✅ Hybrid scanner initialized. Listening for new tokens and momentum spikes...');
 }
 
-module.exports = { startScanner };
+module.exports = { initScanner };
