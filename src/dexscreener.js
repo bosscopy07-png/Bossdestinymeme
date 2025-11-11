@@ -1,105 +1,86 @@
+// src/dexscreener.js
 const axios = require('axios');
 
-const DEFAULT_LIMIT = parseInt(process.env.DEXSCR_LIMIT || '80');
-const MIN_VALID_PRICE = 0.00000001;
-const MIN_VALID_LIQUIDITY = parseFloat(process.env.MIN_LIQ_USD || '30');
-const MAX_RETRIES = 5; // retry more times for 429
-const RETRY_DELAY_MS = 3000; // 3s
 const CHAIN = 'bsc';
+const DEFAULT_LIMIT = parseInt(process.env.DEXSCR_LIMIT || '80');
+const MIN_VALID_LIQUIDITY = parseFloat(process.env.MIN_LIQ_USD || '30');
+const RETRY_DELAY_MS = 4000;
+const MAX_RETRIES = 3;
 
-// Cache last good results
-let lastPairs = [];
-
-function safeFloat(val, defaultVal = 0) {
+function safeFloat(val, def = 0) {
   const f = parseFloat(val);
-  return isNaN(f) ? defaultVal : f;
+  return isNaN(f) ? def : f;
 }
 
-function safeInt(val, defaultVal = 0) {
+function safeInt(val, def = 0) {
   const i = parseInt(val);
-  return isNaN(i) ? defaultVal : i;
+  return isNaN(i) ? def : i;
 }
 
-async function fetchTrendingPairs() {
+async function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function fetchTokens() {
+  const url = `https://api.dexscreener.com/latest/dex/tokens?chain=${CHAIN}`;
   let results = [];
-  let backoff = RETRY_DELAY_MS;
+  let attempt = 0;
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+  while (attempt < MAX_RETRIES) {
+    attempt++;
     try {
-      const url = `https://api.dexscreener.com/latest/dex/tokens?chain=${CHAIN}`;
-      const res = await axios.get(url, { timeout: 8000 });
+      const res = await axios.get(url, { timeout: 10000 });
 
-      if (!res.data || !res.data.tokens) {
-        console.warn(`⚠️ Attempt ${attempt}: No data returned from DexScreener`);
-        throw new Error('No data in DexScreener response');
-      }
-
-      const pairs = res.data.tokens
-        .filter(
-          (p) =>
-            safeFloat(p?.priceUsd || p?.price) >= MIN_VALID_PRICE &&
-            safeFloat(p?.liquidity?.usd || p?.liquidity_usd) >= MIN_VALID_LIQUIDITY
-        )
-        .slice(0, DEFAULT_LIMIT)
-        .map((p) => ({
-          pair: (p.pairAddress || p.pair || '').toLowerCase(),
-          token: p.symbol || 'TOKEN',
-          tokenAddress: p.address || null,
-          base: p.baseToken?.symbol || 'BUSD',
-          baseAddress: p.baseToken?.address || null,
-          chainId: CHAIN,
-          liquidity: safeFloat(p.liquidity?.usd || p.liquidity_usd),
-          price: safeFloat(p.priceUsd || p.price),
-          chartUrl: p.url || p.chart || null,
-          txs: safeInt(p.txns24h?.buys || p.txCount),
-          volume24h: safeFloat(p.volume?.usd24h),
-          fdv: safeFloat(p.fdv),
-          dexId: p.dexId || 'unknown',
-        }));
-
-      if (pairs.length === 0) {
-        console.warn(`⚠️ Attempt ${attempt}: No valid pairs, retrying in ${backoff / 1000}s...`);
-        await new Promise((r) => setTimeout(r, backoff));
-        backoff *= 2; // exponential backoff for 429
+      if (!res.data || !res.data.pairs) {
+        console.warn(`⚠️ Attempt ${attempt}: No data from DexScreener tokens endpoint`);
+        await sleep(RETRY_DELAY_MS);
         continue;
       }
 
+      const pairs = res.data.pairs
+        .filter(
+          (p) =>
+            safeFloat(p.liquidity?.usd) >= MIN_VALID_LIQUIDITY &&
+            safeFloat(p.priceUsd) > 0
+        )
+        .slice(0, DEFAULT_LIMIT)
+        .map((p) => ({
+          pairAddress: (p.pairAddress || '').toLowerCase(),
+          address: p.baseToken?.address || p.token0?.address,
+          symbol: p.baseToken?.symbol || p.token0?.symbol || 'TOKEN',
+          name: p.baseToken?.name || p.token0?.name || 'Unknown',
+          priceUsd: safeFloat(p.priceUsd),
+          liquidity: safeFloat(p.liquidity?.usd),
+          volume24h: safeFloat(p.volume?.usd24h),
+          txns24h: safeInt(p.txns24h?.buys || 0),
+          dexId: p.dexId || 'unknown',
+          url: p.url || null,
+          fdv: safeFloat(p.fdv),
+          devShare: safeFloat(p.devShare || 0),
+        }));
+
       results.push(...pairs);
-      lastPairs = pairs; // cache last good pairs
       break;
     } catch (err) {
       if (err.response?.status === 429) {
-        console.warn(`⚠️ Attempt ${attempt}: Rate limited, backing off ${backoff / 1000}s`);
-        await new Promise((r) => setTimeout(r, backoff));
-        backoff *= 2;
+        console.warn(`⚠️ Rate limited (429). Waiting ${RETRY_DELAY_MS / 1000}s before retry...`);
       } else {
-        console.error(`❌ Attempt ${attempt}: DexScreener fetch failed:`, err.message);
-        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+        console.error(`❌ DexScreener fetchTokens attempt ${attempt} failed:`, err.message);
       }
+      await sleep(RETRY_DELAY_MS);
     }
   }
 
-  if (results.length === 0 && lastPairs.length > 0) {
-    console.log('⚠️ Using cached pairs due to fetch failures');
-    results = lastPairs;
-  }
-
   results = results.sort((a, b) => b.liquidity - a.liquidity);
+  console.log(`✅ DexScreener fetched ${results.length} token pairs`);
 
-  console.log(`✅ DexScreener fetched ${results.length} BSC tokens`);
   if (results.length > 0) {
-    console.log(
-      '🔝 Top 3 tokens:',
-      results
-        .slice(0, 3)
-        .map((p) => `${p.token}/${p.base} ($${p.liquidity.toFixed(2)})`)
-        .join(' | ')
-    );
+    console.log('🔝 Top 3 tokens:', results.slice(0, 3).map(t => `${t.symbol} ($${t.liquidity.toFixed(2)})`).join(' | '));
   } else {
-    console.warn('⚠️ No valid BSC tokens found after retries.');
+    console.warn('⚠️ No valid tokens found after retries.');
   }
 
   return results;
 }
 
-module.exports = { fetchTrendingPairs };
+module.exports = { fetchTokens };
