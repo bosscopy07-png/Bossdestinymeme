@@ -3,7 +3,7 @@ const axios = require('axios');
 const DEFAULT_LIMIT = parseInt(process.env.DEXSCR_LIMIT || '80');
 const MIN_VALID_PRICE = 0.00000001;
 const MIN_VALID_LIQUIDITY = parseFloat(process.env.MIN_LIQ_USD || '5');
-const MAX_RETRIES = 3; // increased retries for reliability
+const MAX_RETRIES = 3; // retry count
 const RETRY_DELAY_MS = 3000; // 3 seconds
 const CHAIN = 'bsc';
 
@@ -24,7 +24,8 @@ async function fetchTrendingPairs() {
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const url = `https://api.dexscreener.com/latest/dex/pairs/${CHAIN}`;
+      // ✅ Use trending endpoint
+      const url = `https://api.dexscreener.com/latest/dex/trending?chain=${CHAIN}`;
       const res = await axios.get(url, { timeout: 8000 });
 
       if (!res.data || !res.data.pairs) {
@@ -36,19 +37,20 @@ async function fetchTrendingPairs() {
         .filter(
           (p) =>
             safeFloat(p?.priceUsd || p?.price) >= MIN_VALID_PRICE &&
-            safeFloat(p?.liquidity?.usd || p?.liquidity_usd) >= MIN_VALID_LIQUIDITY
+            safeFloat(p?.liquidity?.usd || p?.liquidity_usd) >= MIN_VALID_LIQUIDITY &&
+            p?.baseToken && p?.quoteToken // ensure tokens exist
         )
         .slice(0, DEFAULT_LIMIT)
         .map((p) => ({
           pair: (p.pairAddress || p.pair || '').toLowerCase(),
-          token: p.baseToken?.symbol || p.token0?.symbol || 'TOKEN',
-          tokenAddress: p.baseToken?.address || p.token0?.address || null,
-          base: p.quoteToken?.symbol || p.token1?.symbol || 'BUSD',
-          baseAddress: p.quoteToken?.address || p.token1?.address || null,
+          token: p.baseToken?.symbol || 'TOKEN',
+          tokenAddress: p.baseToken?.address || null,
+          base: p.quoteToken?.symbol || 'BUSD',
+          baseAddress: p.quoteToken?.address || null,
           chainId: CHAIN,
           liquidity: safeFloat(p.liquidity?.usd || p.liquidity_usd),
           price: safeFloat(p.priceUsd || p.price),
-          chartUrl: p.url || p.chart || null,
+          chartUrl: p.url || null,
           txs: safeInt(p.txns24h?.buys || p.txCount),
           volume24h: safeFloat(p.volume?.usd24h),
           fdv: safeFloat(p.fdv),
