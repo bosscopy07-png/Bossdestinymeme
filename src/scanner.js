@@ -1,12 +1,10 @@
 // src/scanner.js
 const { fetchTrendingPairs } = require('./dexscreener');
-const { initTelegram } = require('./telegram');
 const Web3 = require('web3');
 const dotenv = require('dotenv');
 dotenv.config();
 
 const FACTORY = process.env.PANCAKE_FACTORY; // PancakeSwap Factory address
-const RPC_HTTP = process.env.RPC_HTTP;       // BSC RPC
 const BSC_WS = process.env.BSC_WS;           // optional WebSocket
 const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL || '60000');
 const MIN_LIQ_BUSD = parseFloat(process.env.MIN_LIQ_BUSD || '30');
@@ -17,9 +15,9 @@ const MAX_DEV_SHARE = parseFloat(process.env.MAX_DEV_SHARE || '0.6');
 let seenPairs = new Set();
 let tgBot;
 
-async function initScanner(bot) {
+async function startScanner(bot, logger = console) {
   tgBot = bot;
-  console.log('🛰 Initializing Hybrid Memecoin Scanner...');
+  logger.info('🛰 Initializing Hybrid Memecoin Scanner...');
 
   // --- 1. On-chain PairCreated listener for NEW tokens ---
   if (BSC_WS) {
@@ -31,62 +29,61 @@ async function initScanner(bot) {
 
     factoryContract.events.PairCreated()
       .on('data', async event => {
-        const token0 = event.returnValues.token0;
-        const token1 = event.returnValues.token1;
-        const pair = event.returnValues.pair;
-
+        const { token0, token1, pair } = event.returnValues;
         if (seenPairs.has(pair)) return;
         seenPairs.add(pair);
 
-        // Quick meta check
-        const liquidity = { totalBUSD: 0, price: 0 }; // optional: add RPC call to get real liquidity
-        const raw = {}; // add raw token info if needed
-        const honeypot = false; // optional: call honeypot checker
+        const liquidity = { totalBUSD: 0, price: 0 };
+        const raw = {};
+        const honeypot = false;
         const scoreLabel = 'New';
         const scoreValue = 100;
 
-        console.log(`🔹 New pair detected: ${token0}/${token1} (${pair})`);
+        logger.info(`🔹 New pair detected: ${token0}/${token1} (${pair})`);
         await tgBot.sendSignal({ token0, token1, pair, liquidity, honeypot, scoreLabel, scoreValue, raw });
       })
-      .on('error', err => console.error('PairCreated listener error:', err));
+      .on('error', err => logger.error('PairCreated listener error:', err));
   } else {
-    console.warn('⚠️ BSC_WS not configured — PairCreated listener disabled');
+    logger.warn('⚠️ BSC_WS not configured — PairCreated listener disabled');
   }
 
   // --- 2. DexScreener polling for existing token momentum ---
   setInterval(async () => {
-    const pairs = await fetchTrendingPairs();
+    try {
+      const pairs = await fetchTrendingPairs();
 
-    for (const p of pairs) {
-      if (seenPairs.has(p.pair)) continue; // skip already alerted tokens
+      for (const p of pairs) {
+        if (seenPairs.has(p.pair)) continue;
 
-      // Calculate a simple score / filter
-      const devShare = p.devShare || 0; // if available from metadata
-      if (p.liquidity < MIN_LIQ_BUSD && !(p.txs >= MIN_TXS && p.price * MOMENTUM_MIN > 0)) continue;
-      if (devShare > MAX_DEV_SHARE) continue;
+        const devShare = p.devShare || 0;
+        if (p.liquidity < MIN_LIQ_BUSD && !(p.txs >= MIN_TXS && p.price * MOMENTUM_MIN > 0)) continue;
+        if (devShare > MAX_DEV_SHARE) continue;
 
-      seenPairs.add(p.pair);
+        seenPairs.add(p.pair);
 
-      const raw = p; // pass the full pair object
-      const scoreLabel = 'Momentum';
-      const scoreValue = Math.round((p.liquidity + (p.volume24h || 0)) / 1000);
+        const raw = p;
+        const scoreLabel = 'Momentum';
+        const scoreValue = Math.round((p.liquidity + (p.volume24h || 0)) / 1000);
 
-      console.log(`📈 Momentum alert: ${p.token}/${p.base} — $${p.liquidity}`);
-      await tgBot.sendSignal({
-        token0: p.token,
-        token1: p.base,
-        pair: p.pair,
-        liquidity: { totalBUSD: p.liquidity, price: p.price },
-        honeypot: false,
-        scoreLabel,
-        scoreValue,
-        raw,
-        imgPath: null
-      });
+        logger.info(`📈 Momentum alert: ${p.token}/${p.base} — $${p.liquidity}`);
+        await tgBot.sendSignal({
+          token0: p.token,
+          token1: p.base,
+          pair: p.pair,
+          liquidity: { totalBUSD: p.liquidity, price: p.price },
+          honeypot: false,
+          scoreLabel,
+          scoreValue,
+          raw,
+          imgPath: null
+        });
+      }
+    } catch (err) {
+      logger.error('DexScreener polling error:', err.message || err);
     }
   }, POLL_INTERVAL);
 
-  console.log('✅ Hybrid scanner initialized. Listening for new tokens and momentum spikes...');
+  logger.info('✅ Hybrid scanner initialized. Listening for new tokens and momentum spikes...');
 }
 
-module.exports = { initScanner };
+module.exports = { startScanner };
