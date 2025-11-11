@@ -10,7 +10,7 @@ const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL || '60000');
 const MIN_LIQ_BUSD = parseFloat(process.env.MIN_LIQ_BUSD || '30');
 const MIN_TXS = parseInt(process.env.MIN_TXS || '5');
 const MOMENTUM_MIN = parseFloat(process.env.MOMENTUM_MIN || '0.05');
-const MAX_DEV_SHARE = parseFloat(process.env.MAX_DEV_SHARE || '0.6');
+const MAX_DEV_SHARE = parseFloat(process.env.MAX_DEV_SHARE || '0.2');
 
 let seenPairs = new Set();
 let tgBot;
