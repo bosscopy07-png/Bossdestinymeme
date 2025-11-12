@@ -3,7 +3,7 @@ const { Telegraf } = require('telegraf');
 const fs = require('fs');
 const dotenv = require('dotenv');
 const { paperBuy, paperSell, load } = require('./papertrader');
-const { fetchTrendingPairs } = require('./geckoterminal'); // ✅ now from GeckoTerminal
+const { fetchGeckoTrending } = require('./scanner');
 
 dotenv.config();
 
