@@ -1,6 +1,6 @@
 // src/dexscreener.js
 const axios = require("axios");
-const HttpsProxyAgent = require("https-proxy-agent");
+const { HttpsProxyAgent } = require("https-proxy-agent");
 
 const CHAIN = "bsc";
 const DEFAULT_LIMIT = parseInt(process.env.DEXSCR_LIMIT || "80");
