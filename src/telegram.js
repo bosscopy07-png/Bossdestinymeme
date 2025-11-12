@@ -29,7 +29,7 @@ async function initTelegram() {
     if (ctx?.update?.message) console.log('Failed message:', ctx.update.message.text);
   });
 
-  // === Inline actions ===
+  // Inline actions
   bot.action(/buy_(.+)/, async ctx => {
     const id = ctx.match[1];
     const payload = signalStore.get(id);
@@ -58,7 +58,7 @@ async function initTelegram() {
   bot.action(/ignore_(.+)/, async ctx => await ctx.answerCbQuery('🚫 Ignored'));
   bot.action(/watch_(.+)/, async ctx => await ctx.answerCbQuery('⭐ Added to Watchlist'));
 
-  // === Commands ===
+  // Commands
   bot.command('balance', async ctx => {
     const db = load();
     await ctx.reply(`💵 Paper Balance: $${(db.balance || 0).toFixed(2)}`);
@@ -74,7 +74,7 @@ async function initTelegram() {
     await ctx.reply(`📋 Recent Trades:\n${top}`);
   });
 
-  // === Launch Bot ===
+  // Launch
   try {
     if (process.env.RENDER === 'true' && process.env.RENDER_EXTERNAL_URL) {
       const domain = process.env.RENDER_EXTERNAL_URL;
@@ -89,57 +89,35 @@ async function initTelegram() {
     console.error('❌ Telegram launch failed:', err);
   }
 
-  // === Signal Sender ===
+  // === sendSignal function ===
   return {
     sendSignal: async ({ token0, token1, pair, liquidity, honeypot, imgPath, scoreLabel, scoreValue, raw }) => {
-  try {
-    if (!CHAT_ID) throw new Error('TELEGRAM_CHAT_ID missing');
+      try {
+        if (!CHAT_ID) throw new Error('TELEGRAM_CHAT_ID missing');
 
-    // --- Defaults ---
-    let tokenName = token0 || 'Unknown';
-    let tokenSymbol = token0 || 'UNKNOWN';
-    let devHold = 'N/A';
-    let price = 0;
-    let liq = 0;
-    let momentum = 0;
+        // Fetch meta
+        const meta = await getTokenMeta(token0, process.env.RPC_HTTP);
+        const tokenName = meta?.name || token0 || 'Unknown';
+        const tokenSymbol = meta?.symbol || token0 || 'UNKNOWN';
+        const devHold = meta?.ownerBalance && meta?.totalSupply
+          ? ((Number(meta.ownerBalance) / Number(meta.totalSupply)) * 100).toFixed(2)
+          : 'N/A';
+        const price = liquidity?.price || raw?.price || 0;
+        const liq = liquidity?.totalBUSD || raw?.liquidity?.totalBUSD || 0;
+        const momentum = raw?.momentum ? (raw.momentum * 100).toFixed(2) : 0;
 
-    // --- Use liquidity if available ---
-    if (liquidity) {
-      price = liquidity.price || 0;
-      liq = liquidity.totalBUSD || 0;
-    }
+        // Trending check
+        const trendingPairs = await fetchGeckoTrending();
+        const isTrending = trendingPairs.some(p => p.token0?.toLowerCase() === token0?.toLowerCase());
 
-    // --- Use raw if liquidity missing ---
-    if (raw) {
-      price = price || raw.price || 0;
-      liq = liq || raw.liquidity?.totalBUSD || 0;
-      momentum = raw.momentum ? (raw.momentum * 100).toFixed(2) : 0;
-    }
+        const alertEmoji = honeypot ? '🔴' : '🟢';
+        const alertTitle = honeypot
+          ? '⚠️ Possible Honeypot Detected'
+          : isTrending
+            ? '🚀 Trending Token Detected'
+            : '🌱 New Token Detected';
 
-    // --- Fetch on-chain meta ---
-    const meta = await getTokenMeta(token0, process.env.RPC_HTTP);
-    if (meta) {
-      tokenName = meta.name || tokenName;
-      tokenSymbol = meta.symbol || tokenSymbol;
-      if (meta.ownerBalance && meta.totalSupply) {
-        devHold = ((Number(meta.ownerBalance) / Number(meta.totalSupply)) * 100).toFixed(2);
-      }
-      // Optional: fallback price if liquidity is 0
-      price = price || 0;
-    }
-
-    // --- Check trending ---
-    const trendingPairs = await fetchGeckoTrending();
-    const isTrending = trendingPairs.some(p => p.token0?.toLowerCase() === token0?.toLowerCase());
-
-    const alertEmoji = honeypot ? '🔴' : '🟢';
-    const alertTitle = honeypot
-      ? '⚠️ Possible Honeypot Detected'
-      : isTrending
-        ? '🚀 Trending Token Detected'
-        : '🌱 New Token Detected';
-
-    const msg = `
+        const msg = `
 <b>${alertEmoji} ${alertTitle}</b>
 
 💠 <b>Token:</b> ${tokenName} (${tokenSymbol})
@@ -157,39 +135,38 @@ ${isTrending ? '🔥 This token is trending on GeckoTerminal!' : ''}
 #memecoin #scanner
 `;
 
-    const id = Math.random().toString(36).substring(2, 12);
-    signalStore.set(id, raw || {});
+        const id = Math.random().toString(36).substring(2, 12);
+        signalStore.set(id, raw || {});
 
-    const reply_markup = {
-      inline_keyboard: [
-        [
-          { text: '🟢 Paper Buy $10', callback_data: `buy_${id}` },
-          { text: '🚫 Ignore', callback_data: `ignore_${id}` },
-        ],
-        [{ text: '⭐ Add to Watchlist', callback_data: `watch_${id}` }],
-      ],
-    };
+        const reply_markup = {
+          inline_keyboard: [
+            [
+              { text: '🟢 Paper Buy $10', callback_data: `buy_${id}` },
+              { text: '🚫 Ignore', callback_data: `ignore_${id}` },
+            ],
+            [{ text: '⭐ Add to Watchlist', callback_data: `watch_${id}` }],
+          ],
+        };
 
-    if (imgPath && fs.existsSync(imgPath)) {
-      await bot.telegram.sendPhoto(
-        CHAT_ID,
-        { source: fs.createReadStream(imgPath) },
-        { caption: msg, parse_mode: 'HTML', reply_markup }
-      );
-    } else {
-      await bot.telegram.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML', reply_markup });
+        if (imgPath && fs.existsSync(imgPath)) {
+          await bot.telegram.sendPhoto(
+            CHAT_ID,
+            { source: fs.createReadStream(imgPath) },
+            { caption: msg, parse_mode: 'HTML', reply_markup }
+          );
+        } else {
+          await bot.telegram.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML', reply_markup });
+        }
+
+        await new Promise(r => setTimeout(r, 1500)); // cooldown
+      } catch (error) {
+        console.error('❌ tg.sendSignal failed:', error.message);
+      }
     }
-
-    await new Promise(r => setTimeout(r, 1500)); // cooldown
-  } catch (error) {
-    console.error('❌ tg.sendSignal failed:', error.message);
-  }
-};
+  };
+}
 
 // === Hybrid Scanner ===
-const { fetchGeckoTrending, fetchNewPairs } = require('./scanner');
-const { getTokenMeta } = require('./utils'); // make sure utils.js exports getTokenMeta
-
 async function startHybridScanner(sendSignal) {
   const seenPairs = new Set();
 
@@ -203,16 +180,7 @@ async function startHybridScanner(sendSignal) {
         if (seenPairs.has(t.pairAddress)) continue;
         seenPairs.add(t.pairAddress);
 
-        // Fetch on-chain token meta
         const meta = await getTokenMeta(t.token0, process.env.RPC_HTTP);
-
-        const price = t.liquidity?.price || t.price || 0;
-        const liq = t.liquidity?.totalBUSD || 0;
-        const momentum = t.momentum ? (t.momentum * 100).toFixed(2) : 0;
-        let devHold = 'N/A';
-        if (meta?.ownerBalance && meta?.totalSupply) {
-          devHold = ((Number(meta.ownerBalance) / Number(meta.totalSupply)) * 100).toFixed(2);
-        }
 
         await sendSignal({
           token0: t.token0,
@@ -228,9 +196,8 @@ async function startHybridScanner(sendSignal) {
             symbol: meta?.symbol || t.token0,
             ownerBalance: meta?.ownerBalance,
             totalSupply: meta?.totalSupply,
-            price,
-            momentum,
-            devHold
+            price: t.liquidity?.price || t.price || 0,
+            momentum: t.momentum || 0
           }
         });
       }
@@ -243,16 +210,7 @@ async function startHybridScanner(sendSignal) {
         if (seenPairs.has(n.pairAddress)) continue;
         seenPairs.add(n.pairAddress);
 
-        // Fetch on-chain token meta
         const meta = await getTokenMeta(n.token0, process.env.RPC_HTTP);
-
-        const price = n.liquidity?.price || n.price || 0;
-        const liq = n.liquidity?.totalBUSD || 0;
-        const momentum = n.momentum ? (n.momentum * 100).toFixed(2) : 0;
-        let devHold = 'N/A';
-        if (meta?.ownerBalance && meta?.totalSupply) {
-          devHold = ((Number(meta.ownerBalance) / Number(meta.totalSupply)) * 100).toFixed(2);
-        }
 
         await sendSignal({
           token0: n.token0,
@@ -268,16 +226,14 @@ async function startHybridScanner(sendSignal) {
             symbol: meta?.symbol || n.token0,
             ownerBalance: meta?.ownerBalance,
             totalSupply: meta?.totalSupply,
-            price,
-            momentum,
-            devHold
+            price: n.liquidity?.price || n.price || 0,
+            momentum: n.momentum || 0
           }
         });
       }
 
       console.log("🔁 Cycle complete — restarting...");
       await new Promise(r => setTimeout(r, 8000));
-
     } catch (err) {
       console.error("⚠️ Hybrid cycle error:", err.message);
       await new Promise(r => setTimeout(r, 5000));
@@ -285,5 +241,5 @@ async function startHybridScanner(sendSignal) {
   }
 }
 
-module.exports = { startHybridScanner };
-  
+// === Export both functions ===
+module.exports = { initTelegram, startHybridScanner };
