@@ -92,39 +92,54 @@ async function initTelegram() {
   // === Signal Sender ===
   return {
     sendSignal: async ({ token0, token1, pair, liquidity, honeypot, imgPath, scoreLabel, scoreValue, raw }) => {
-      try {
-        if (!CHAT_ID) throw new Error('TELEGRAM_CHAT_ID missing');
+  try {
+    if (!CHAT_ID) throw new Error('TELEGRAM_CHAT_ID missing');
 
-        // --- Normalize token meta ---
-        let tokenName = token0 || 'Unknown';
-        let tokenSymbol = token0 || 'UNKNOWN';
-        let devHold = 'N/A';
-        let price = liquidity?.price || raw?.price || 0;
-        let liq = liquidity?.totalBUSD || raw?.liquidity?.totalBUSD || 0;
-        let momentum = raw?.momentum ? (raw.momentum * 100).toFixed(2) : 0;
+    // --- Defaults ---
+    let tokenName = token0 || 'Unknown';
+    let tokenSymbol = token0 || 'UNKNOWN';
+    let devHold = 'N/A';
+    let price = 0;
+    let liq = 0;
+    let momentum = 0;
 
-        // Fetch on-chain meta if missing
-        const meta = await getTokenMeta(token0, process.env.RPC_HTTP);
-        if (meta) {
-          tokenName = meta.name || tokenName;
-          tokenSymbol = meta.symbol || tokenSymbol;
-          if (meta.ownerBalance && meta.totalSupply) {
-            devHold = ((parseFloat(meta.ownerBalance) / parseFloat(meta.totalSupply)) * 100).toFixed(2);
-          }
-        }
+    // --- Use liquidity if available ---
+    if (liquidity) {
+      price = liquidity.price || 0;
+      liq = liquidity.totalBUSD || 0;
+    }
 
-        // Check if trending
-        const trendingPairs = await fetchGeckoTrending();
-        const isTrending = trendingPairs.some(p => p.token0?.toLowerCase() === token0?.toLowerCase());
+    // --- Use raw if liquidity missing ---
+    if (raw) {
+      price = price || raw.price || 0;
+      liq = liq || raw.liquidity?.totalBUSD || 0;
+      momentum = raw.momentum ? (raw.momentum * 100).toFixed(2) : 0;
+    }
 
-        const alertEmoji = honeypot ? '🔴' : '🟢';
-        const alertTitle = honeypot
-          ? '⚠️ Possible Honeypot Detected'
-          : isTrending
-            ? '🚀 Trending Token Detected'
-            : '🌱 New Token Detected';
+    // --- Fetch on-chain meta ---
+    const meta = await getTokenMeta(token0, process.env.RPC_HTTP);
+    if (meta) {
+      tokenName = meta.name || tokenName;
+      tokenSymbol = meta.symbol || tokenSymbol;
+      if (meta.ownerBalance && meta.totalSupply) {
+        devHold = ((Number(meta.ownerBalance) / Number(meta.totalSupply)) * 100).toFixed(2);
+      }
+      // Optional: fallback price if liquidity is 0
+      price = price || 0;
+    }
 
-        const msg = `
+    // --- Check trending ---
+    const trendingPairs = await fetchGeckoTrending();
+    const isTrending = trendingPairs.some(p => p.token0?.toLowerCase() === token0?.toLowerCase());
+
+    const alertEmoji = honeypot ? '🔴' : '🟢';
+    const alertTitle = honeypot
+      ? '⚠️ Possible Honeypot Detected'
+      : isTrending
+        ? '🚀 Trending Token Detected'
+        : '🌱 New Token Detected';
+
+    const msg = `
 <b>${alertEmoji} ${alertTitle}</b>
 
 💠 <b>Token:</b> ${tokenName} (${tokenSymbol})
@@ -142,36 +157,34 @@ ${isTrending ? '🔥 This token is trending on GeckoTerminal!' : ''}
 #memecoin #scanner
 `;
 
-        const id = Math.random().toString(36).substring(2, 12);
-        signalStore.set(id, raw || {});
+    const id = Math.random().toString(36).substring(2, 12);
+    signalStore.set(id, raw || {});
 
-        const reply_markup = {
-          inline_keyboard: [
-            [
-              { text: '🟢 Paper Buy $10', callback_data: `buy_${id}` },
-              { text: '🚫 Ignore', callback_data: `ignore_${id}` },
-            ],
-            [{ text: '⭐ Add to Watchlist', callback_data: `watch_${id}` }],
-          ],
-        };
+    const reply_markup = {
+      inline_keyboard: [
+        [
+          { text: '🟢 Paper Buy $10', callback_data: `buy_${id}` },
+          { text: '🚫 Ignore', callback_data: `ignore_${id}` },
+        ],
+        [{ text: '⭐ Add to Watchlist', callback_data: `watch_${id}` }],
+      ],
+    };
 
-        if (imgPath && fs.existsSync(imgPath)) {
-          await bot.telegram.sendPhoto(
-            CHAT_ID,
-            { source: fs.createReadStream(imgPath) },
-            { caption: msg, parse_mode: 'HTML', reply_markup }
-          );
-        } else {
-          await bot.telegram.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML', reply_markup });
-        }
+    if (imgPath && fs.existsSync(imgPath)) {
+      await bot.telegram.sendPhoto(
+        CHAT_ID,
+        { source: fs.createReadStream(imgPath) },
+        { caption: msg, parse_mode: 'HTML', reply_markup }
+      );
+    } else {
+      await bot.telegram.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML', reply_markup });
+    }
 
-        await new Promise(r => setTimeout(r, 1500)); // cooldown
-      } catch (error) {
-        console.error('❌ tg.sendSignal failed:', error.message);
-      }
-    },
-  };
-}
+    await new Promise(r => setTimeout(r, 1500)); // cooldown
+  } catch (error) {
+    console.error('❌ tg.sendSignal failed:', error.message);
+  }
+};
 
 // === Hybrid Scanner ===
 const { fetchGeckoTrending, fetchNewPairs } = require('./scanner');
