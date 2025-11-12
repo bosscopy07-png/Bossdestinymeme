@@ -3,7 +3,7 @@ const { Telegraf } = require('telegraf');
 const fs = require('fs');
 const dotenv = require('dotenv');
 const { paperBuy, paperSell, load } = require('./papertrader');
-const { fetchGeckoTrending } = require('./scanner'); // ✅ Fetch trending tokens from scanner.js
+const { fetchGeckoTrending } = require('./scanner'); // fetch trending tokens
 
 dotenv.config();
 
@@ -11,6 +11,9 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 let bot;
+
+// --- In-memory store for signals ---
+const signalStore = new Map();
 
 async function initTelegram() {
   if (!BOT_TOKEN) throw new Error('❌ TELEGRAM_BOT_TOKEN not set');
@@ -29,24 +32,34 @@ async function initTelegram() {
 
   // === Inline actions ===
   bot.action(/buy_(.+)/, async ctx => {
+    const id = ctx.match[1];
+    const payload = signalStore.get(id);
+    if (!payload) return await ctx.answerCbQuery('⚠️ Signal not found');
+
     try {
-      const payload = JSON.parse(Buffer.from(ctx.match[1], 'base64').toString('utf8'));
       const amount = 10;
       const res = await paperBuy(payload, amount);
       await ctx.answerCbQuery(res.ok ? `✅ Paper buy executed: $${amount}` : `❌ Buy failed: ${res.reason}`);
-    } catch (err) {
+    } catch {
       await ctx.answerCbQuery('⚠️ Buy error');
     }
   });
 
-  bot.action(/sell_(\d+)/, async ctx => {
-    const id = parseInt(ctx.match[1]);
-    const res = await paperSell(id);
-    await ctx.answerCbQuery(res.ok ? '✅ Paper sell executed' : '❌ Sell failed');
+  bot.action(/sell_(.+)/, async ctx => {
+    const id = ctx.match[1];
+    const payload = signalStore.get(id);
+    if (!payload) return await ctx.answerCbQuery('⚠️ Signal not found');
+
+    try {
+      const res = await paperSell(payload.id || 0);
+      await ctx.answerCbQuery(res.ok ? '✅ Paper sell executed' : '❌ Sell failed');
+    } catch {
+      await ctx.answerCbQuery('⚠️ Sell error');
+    }
   });
 
   bot.action(/ignore_(.+)/, async ctx => await ctx.answerCbQuery('🚫 Ignored'));
-  bot.action(/watch_(.+)/, async ctx => await ctx.answerCbQuery('⭐ Added to watchlist'));
+  bot.action(/watch_(.+)/, async ctx => await ctx.answerCbQuery('⭐ Added to Watchlist'));
 
   // === Commands ===
   bot.command('balance', async ctx => {
@@ -85,12 +98,12 @@ async function initTelegram() {
       try {
         if (!CHAT_ID) throw new Error('TELEGRAM_CHAT_ID missing');
 
-        // ✅ Fetch trending tokens from GeckoTerminal
+        // ✅ Validate if trending
         const trendingPairs = await fetchGeckoTrending();
         const isTrending = trendingPairs.some(p => p.token0?.toLowerCase() === token0?.toLowerCase());
 
-        const alertEmoji = honeypot === true || honeypot === 'yes' || honeypot === 'true' ? '🔴' : '🟢';
-        const alertTitle = honeypot === true || honeypot === 'yes' || honeypot === 'true'
+        const alertEmoji = honeypot ? '🔴' : '🟢';
+        const alertTitle = honeypot
           ? '⚠️ Possible Honeypot Detected'
           : isTrending
             ? '🚀 Trending Token Detected'
@@ -121,20 +134,17 @@ ${isTrending ? '🔥 This token is trending on GeckoTerminal!' : ''}
 #memecoin #scanner
 `;
 
-        const payload = Buffer.from(
-          JSON.stringify(raw || {}, (_, v) => (typeof v === 'bigint' ? v.toString() : v))
-        ).toString('base64');
-        const buyCb = `buy_${payload}`;
-        const ignoreCb = `ignore_${pair}`;
-        const watchCb = `watch_${pair}`;
+        // --- Safe button payload ---
+        const id = Math.random().toString(36).substring(2, 12); // 10-char ID
+        signalStore.set(id, raw || {});
 
         const reply_markup = {
           inline_keyboard: [
             [
-              { text: '🟢 Paper Buy $10', callback_data: buyCb },
-              { text: '🚫 Ignore', callback_data: ignoreCb },
+              { text: '🟢 Paper Buy $10', callback_data: `buy_${id}` },
+              { text: '🚫 Ignore', callback_data: `ignore_${id}` },
             ],
-            [{ text: '⭐ Add to Watchlist', callback_data: watchCb }],
+            [{ text: '⭐ Add to Watchlist', callback_data: `watch_${id}` }],
           ],
         };
 
