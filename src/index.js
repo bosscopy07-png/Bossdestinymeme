@@ -4,8 +4,8 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const winston = require('winston');
-const { initTelegram } = require('./telegram');
-const { startScanner } = require('./scanner');
+const { initTelegram, startHybridScanner } = require('./telegram');
+const { startScanner } = require('./scanner'); // if still needed for extra scanner
 
 // ---------------------------
 // 🧠 Logger Configuration
@@ -53,12 +53,8 @@ async function main() {
 
     // --- Launch Hybrid Scanner ---
     logger.info('🔍 Launching hybrid scanner (DexScreener + on-chain)...');
-    if (typeof startScanner !== 'function') {
-      throw new Error('startScanner is not a function — check scanner.js export!');
-    }
-
-    await startScanner(tg, logger);
-    logger.info('✅ Scanner launched successfully.');
+    await startHybridScanner(tg.sendSignal);
+    logger.info('✅ Hybrid scanner launched successfully.');
 
     // --- Express Keep-Alive Server ---
     const app = express();
