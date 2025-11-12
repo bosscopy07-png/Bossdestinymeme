@@ -3,7 +3,7 @@ const { Telegraf } = require('telegraf');
 const fs = require('fs');
 const dotenv = require('dotenv');
 const { paperBuy, paperSell, load } = require('./papertrader');
-const { fetchGeckoTrending } = require('./scanner'); // fetch trending tokens
+const { fetchGeckoTrending, fetchNewPairs } = require('./scanner'); // now using both
 
 dotenv.config();
 
@@ -11,8 +11,6 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 let bot;
-
-// --- In-memory store for signals ---
 const signalStore = new Map();
 
 async function initTelegram() {
@@ -24,7 +22,7 @@ async function initTelegram() {
   // Start message
   bot.start(ctx => ctx.reply('🤖 Memecoin Scanner PRO connected and ready ✅'));
 
-  // Global error handler
+  // Error handler
   bot.catch((err, ctx) => {
     console.error('[Telegram Error]', err);
     if (ctx?.update?.message) console.log('Failed message:', ctx.update.message.text);
@@ -35,7 +33,6 @@ async function initTelegram() {
     const id = ctx.match[1];
     const payload = signalStore.get(id);
     if (!payload) return await ctx.answerCbQuery('⚠️ Signal not found');
-
     try {
       const amount = 10;
       const res = await paperBuy(payload, amount);
@@ -49,7 +46,6 @@ async function initTelegram() {
     const id = ctx.match[1];
     const payload = signalStore.get(id);
     if (!payload) return await ctx.answerCbQuery('⚠️ Signal not found');
-
     try {
       const res = await paperSell(payload.id || 0);
       await ctx.answerCbQuery(res.ok ? '✅ Paper sell executed' : '❌ Sell failed');
@@ -107,7 +103,7 @@ async function initTelegram() {
           ? '⚠️ Possible Honeypot Detected'
           : isTrending
             ? '🚀 Trending Token Detected'
-            : '🚀 New Token Detected';
+            : '🌱 New Token Detected';
 
         const liq = liquidity?.totalBUSD || 0;
         const price = liquidity?.price || 0;
@@ -134,8 +130,7 @@ ${isTrending ? '🔥 This token is trending on GeckoTerminal!' : ''}
 #memecoin #scanner
 `;
 
-        // --- Safe button payload ---
-        const id = Math.random().toString(36).substring(2, 12); // 10-char ID
+        const id = Math.random().toString(36).substring(2, 12);
         signalStore.set(id, raw || {});
 
         const reply_markup = {
@@ -158,7 +153,7 @@ ${isTrending ? '🔥 This token is trending on GeckoTerminal!' : ''}
           await bot.telegram.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML', reply_markup });
         }
 
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 1500)); // cooldown
       } catch (error) {
         console.error('❌ tg.sendSignal failed:', error.message);
       }
@@ -166,4 +161,61 @@ ${isTrending ? '🔥 This token is trending on GeckoTerminal!' : ''}
   };
 }
 
-module.exports = { initTelegram };
+// === Auto Hybrid Switching System ===
+async function startHybridScanner(sendSignal) {
+  const seenPairs = new Set();
+
+  while (true) {
+    try {
+      console.log("🚀 Fetching trending tokens...");
+      const trending = await fetchGeckoTrending();
+      const top3 = trending.slice(0, 3);
+
+      for (const t of top3) {
+        if (seenPairs.has(t.pairAddress)) continue;
+        seenPairs.add(t.pairAddress);
+        await sendSignal({
+          token0: t.token0,
+          token1: t.token1,
+          pair: t.pairAddress,
+          liquidity: t.liquidity || {},
+          honeypot: false,
+          scoreLabel: "Trending",
+          scoreValue: 85,
+          raw: t,
+        });
+      }
+
+      console.log("🌱 Switching to new on-chain pairs...");
+      const newPairs = await fetchNewPairs();
+      const topNew = newPairs.slice(0, 2);
+
+      for (const n of topNew) {
+        if (seenPairs.has(n.pairAddress)) continue;
+        seenPairs.add(n.pairAddress);
+        await sendSignal({
+          token0: n.token0,
+          token1: n.token1,
+          pair: n.pairAddress,
+          liquidity: n.liquidity || {},
+          honeypot: n.honeypot || false,
+          scoreLabel: "New Launch",
+          scoreValue: 75,
+          raw: n,
+        });
+      }
+
+      console.log("🔁 Cycle complete — restarting...");
+      await new Promise(r => setTimeout(r, 8000));
+    } catch (err) {
+      console.error("⚠️ Hybrid cycle error:", err.message);
+      await new Promise(r => setTimeout(r, 5000));
+    }
+  }
+}
+
+// === Run System ===
+(async () => {
+  const tg = await initTelegram();
+  startHybridScanner(tg.sendSignal);
+})();
