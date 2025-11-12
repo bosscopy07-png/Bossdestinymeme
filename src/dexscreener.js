@@ -1,13 +1,13 @@
 // src/dexscreener.js
 const axios = require('axios');
-const { HttpsProxyAgent } = require('https-proxy-agent');
 
 const CHAIN = 'bsc';
 const DEFAULT_LIMIT = parseInt(process.env.DEXSCR_LIMIT || '80');
 const MIN_VALID_LIQUIDITY = parseFloat(process.env.MIN_LIQ_BUSD || '20');
+const MIN_TXS = parseInt(process.env.MIN_TXS || '5');
 const RETRY_DELAY_MS = 4000;
 const MAX_RETRIES = 3;
-const BASE_URL = `https://api.dexscreener.com/latest/dex/trending?chain=${CHAIN}`;
+const BASE_URL = `https://api.geckoterminal.com/api/v2/networks/${CHAIN}/pools/trending`; // GeckoTerminal endpoint
 
 // --- Helpers ---
 function safeFloat(val, def = 0) {
@@ -24,67 +24,60 @@ async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// --- Fetch trending tokens ---
+// --- Fetch trending tokens/pools ---
 async function fetchTokens() {
   let results = [];
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      console.log(`🌐 Fetching trending tokens from DexScreener (attempt ${attempt})...`);
+      console.log(`🌐 Fetching trending tokens from GeckoTerminal (attempt ${attempt})...`);
 
-      const axiosConfig = {
+      const res = await axios.get(BASE_URL, {
         timeout: 10000,
         headers: {
           'User-Agent': 'BossDestinyScanner/1.0',
           'Accept': 'application/json',
         },
-      };
+      });
 
-      // Optional proxy support
-      if (process.env.DEXSCR_PROXY) {
-        try {
-          axiosConfig.httpsAgent = new HttpsProxyAgent(process.env.DEXSCR_PROXY);
-        } catch {
-          console.warn('⚠️ Invalid proxy, skipping proxy usage.');
-        }
-      }
-
-      const res = await axios.get(BASE_URL, axiosConfig);
-
-      if (!res.data || !Array.isArray(res.data.pairs)) {
-        console.warn(`⚠️ Attempt ${attempt}: No trending token data returned`);
+      if (!res.data || !Array.isArray(res.data.data)) {
+        console.warn(`⚠️ Attempt ${attempt}: No pool data returned from GeckoTerminal`);
         await sleep(RETRY_DELAY_MS);
         continue;
       }
 
-      const tokens = res.data.pairs
-        .filter((p) => safeFloat(p.liquidity?.usd) >= MIN_VALID_LIQUIDITY && safeFloat(p.priceUsd) > 0)
+      const tokens = res.data.data
+        .map((item) => {
+          const attr = item.attributes || {};
+          return {
+            pairAddress: (attr.address || '').toLowerCase(),
+            symbol: attr.name || 'TOKEN',
+            address: attr.base_token?.address || attr.quote_token?.address || null,
+            name: attr.base_token?.name || 'Unknown',
+            priceUsd: safeFloat(attr.base_token_price_usd || 0),
+            liquidity: safeFloat(attr.reserve_in_usd || attr.liquidity_usd),
+            volume24h: safeFloat(attr.volume_usd || 0),
+            txns24h: safeInt(attr.transactions?.h24?.buys || 0),
+            dexId: attr.dex_id || 'unknown',
+            url: attr.url || null,
+            fdv: safeFloat(attr.fdv || 0),
+          };
+        })
+        .filter((p) => p.liquidity >= MIN_VALID_LIQUIDITY && p.txns24h >= MIN_TXS)
         .slice(0, DEFAULT_LIMIT)
-        .map((p) => ({
-          pairAddress: (p.pairAddress || '').toLowerCase(),
-          address: p.baseToken?.address || p.token0?.address,
-          symbol: p.baseToken?.symbol || p.token0?.symbol || 'TOKEN',
-          name: p.baseToken?.name || p.token0?.name || 'Unknown',
-          priceUsd: safeFloat(p.priceUsd),
-          liquidity: safeFloat(p.liquidity?.usd),
-          volume24h: safeFloat(p.volume?.usd24h || p.volume?.h24),
-          txns24h: safeInt(p.txns24h?.buys || 0),
-          dexId: p.dexId || 'unknown',
-          url: p.url || null,
-          fdv: safeFloat(p.fdv),
-        }));
+        .sort((a, b) => b.liquidity - a.liquidity);
 
-      results = tokens.sort((a, b) => b.liquidity - a.liquidity);
+      results.push(...tokens);
       break; // success
     } catch (err) {
       const code = err.response?.status;
       if (code === 429) {
         console.warn(`⚠️ Rate limited (429). Waiting ${RETRY_DELAY_MS / 1000}s before retry...`);
       } else if (code === 403) {
-        console.error('🚫 Access denied (403). Possible rate block — retrying...');
+        console.error('🚫 Access denied (403) — possible rate block. Retrying...');
       } else if (code === 404) {
         console.error(`❌ Endpoint not found (404): ${BASE_URL}`);
-        break; // stop trying
+        break;
       } else {
         console.error(`❌ Attempt ${attempt} failed:`, err.message);
       }
@@ -92,7 +85,7 @@ async function fetchTokens() {
     }
   }
 
-  console.log(`✅ DexScreener fetched ${results.length} trending tokens`);
+  console.log(`✅ GeckoTerminal fetched ${results.length} tokens/pools`);
   if (results.length > 0) {
     console.log(
       '🔝 Top 3 tokens:',
