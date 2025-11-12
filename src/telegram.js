@@ -4,6 +4,7 @@ const fs = require('fs');
 const dotenv = require('dotenv');
 const { paperBuy, paperSell, load } = require('./papertrader');
 const { fetchGeckoTrending, fetchNewPairs } = require('./scanner');
+const { getTokenMeta } = require('./utils');
 
 dotenv.config();
 
@@ -94,6 +95,25 @@ async function initTelegram() {
       try {
         if (!CHAT_ID) throw new Error('TELEGRAM_CHAT_ID missing');
 
+        // --- Normalize token meta ---
+        let tokenName = token0 || 'Unknown';
+        let tokenSymbol = token0 || 'UNKNOWN';
+        let devHold = 'N/A';
+        let price = liquidity?.price || raw?.price || 0;
+        let liq = liquidity?.totalBUSD || raw?.liquidity?.totalBUSD || 0;
+        let momentum = raw?.momentum ? (raw.momentum * 100).toFixed(2) : 0;
+
+        // Fetch on-chain meta if missing
+        const meta = await getTokenMeta(token0, process.env.RPC_HTTP);
+        if (meta) {
+          tokenName = meta.name || tokenName;
+          tokenSymbol = meta.symbol || tokenSymbol;
+          if (meta.ownerBalance && meta.totalSupply) {
+            devHold = ((parseFloat(meta.ownerBalance) / parseFloat(meta.totalSupply)) * 100).toFixed(2);
+          }
+        }
+
+        // Check if trending
         const trendingPairs = await fetchGeckoTrending();
         const isTrending = trendingPairs.some(p => p.token0?.toLowerCase() === token0?.toLowerCase());
 
@@ -104,23 +124,16 @@ async function initTelegram() {
             ? '🚀 Trending Token Detected'
             : '🌱 New Token Detected';
 
-        const liq = liquidity?.totalBUSD || 0;
-        const price = liquidity?.price || 0;
-        const devHold =
-          raw?.meta?.ownerBalance && raw?.meta?.totalSupply
-            ? ((parseFloat(raw.meta.ownerBalance) / parseFloat(raw.meta.totalSupply)) * 100).toFixed(2)
-            : 'N/A';
-
         const msg = `
 <b>${alertEmoji} ${alertTitle}</b>
 
-💠 <b>Token:</b> ${token0}
-🔸 <b>Base:</b> ${token1}
+💠 <b>Token:</b> ${tokenName} (${tokenSymbol})
+🔸 <b>Base:</b> ${token1 || 'Unknown'}
 🔗 <b>Pair:</b> <code>${pair}</code>
 
 💧 <b>Liquidity:</b> $${liq.toLocaleString(undefined, { maximumFractionDigits: 2 })}
 💵 <b>Price:</b> $${price.toFixed(8)}
-📈 <b>Momentum:</b> ${(raw?.momentum * 100 || 0).toFixed(2)}%
+📈 <b>Momentum:</b> ${momentum}%
 👤 <b>Dev Holding:</b> ${devHold}%
 🧠 <b>Score:</b> ${scoreLabel} (${scoreValue})
 🧨 <b>Honeypot:</b> ${honeypot ? '⚠️ YES — RISK!' : '✅ NO — Safe'}
@@ -173,39 +186,62 @@ async function startHybridScanner(sendSignal) {
       for (const t of top3) {
         if (seenPairs.has(t.pairAddress)) continue;
         seenPairs.add(t.pairAddress);
+
+        const meta = await getTokenMeta(t.token0, process.env.RPC_HTTP);
+
         await sendSignal({
           token0: t.token0,
-          token1: t.token1,
+          token1: t.token1 || 'Unknown',
           pair: t.pairAddress,
           liquidity: t.liquidity || {},
           honeypot: false,
           scoreLabel: "Trending",
           scoreValue: 85,
-          raw: t,
+          raw: {
+            ...t,
+            name: meta?.name,
+            symbol: meta?.symbol,
+            ownerBalance: meta?.ownerBalance,
+            totalSupply: meta?.totalSupply,
+            momentum: t.momentum || 0,
+            price: t.liquidity?.price || 0
+          }
         });
       }
 
-      console.log("🌱 Switching to new on-chain pairs...");
+      console.log("🌱 Fetching new on-chain pairs...");
       const newPairs = await fetchNewPairs();
       const topNew = newPairs.slice(0, 2);
 
       for (const n of topNew) {
         if (seenPairs.has(n.pairAddress)) continue;
         seenPairs.add(n.pairAddress);
+
+        const meta = await getTokenMeta(n.token0, process.env.RPC_HTTP);
+
         await sendSignal({
           token0: n.token0,
-          token1: n.token1,
+          token1: n.token1 || 'Unknown',
           pair: n.pairAddress,
           liquidity: n.liquidity || {},
           honeypot: n.honeypot || false,
           scoreLabel: "New Launch",
           scoreValue: 75,
-          raw: n,
+          raw: {
+            ...n,
+            name: meta?.name,
+            symbol: meta?.symbol,
+            ownerBalance: meta?.ownerBalance,
+            totalSupply: meta?.totalSupply,
+            momentum: n.momentum || 0,
+            price: n.liquidity?.price || 0
+          }
         });
       }
 
       console.log("🔁 Cycle complete — restarting...");
       await new Promise(r => setTimeout(r, 8000));
+
     } catch (err) {
       console.error("⚠️ Hybrid cycle error:", err.message);
       await new Promise(r => setTimeout(r, 5000));
