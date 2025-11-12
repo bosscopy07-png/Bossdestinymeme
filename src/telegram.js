@@ -3,7 +3,7 @@ const { Telegraf } = require('telegraf');
 const fs = require('fs');
 const dotenv = require('dotenv');
 const { paperBuy, paperSell, load } = require('./papertrader');
-const { fetchGeckoTrending } = require('./scanner'); // ✅ Use scanner.js for GeckoTerminal fetch
+const { fetchGeckoTrending } = require('./scanner'); // ✅ Fetch trending tokens from scanner.js
 
 dotenv.config();
 
@@ -85,18 +85,16 @@ async function initTelegram() {
       try {
         if (!CHAT_ID) throw new Error('TELEGRAM_CHAT_ID missing');
 
-        // ✅ Validate using GeckoTerminal trending fetch
+        // ✅ Fetch trending tokens from GeckoTerminal
         const trendingPairs = await fetchGeckoTrending();
-        const exists = trendingPairs.some(p => p.token0?.toLowerCase() === token0?.toLowerCase());
+        const isTrending = trendingPairs.some(p => p.token0?.toLowerCase() === token0?.toLowerCase());
 
-        if (!exists) {
-          console.warn(`⚠️ Skipping signal: ${token0} not in GeckoTerminal trending list`);
-          return;
-        }
-
-        const isHoneypot = honeypot === true || honeypot === 'yes' || honeypot === 'true';
-        const alertEmoji = isHoneypot ? '🔴' : '🟢';
-        const alertTitle = isHoneypot ? '⚠️ Possible Honeypot Detected' : '🚀 New Safe Token Detected';
+        const alertEmoji = honeypot === true || honeypot === 'yes' || honeypot === 'true' ? '🔴' : '🟢';
+        const alertTitle = honeypot === true || honeypot === 'yes' || honeypot === 'true'
+          ? '⚠️ Possible Honeypot Detected'
+          : isTrending
+            ? '🚀 Trending Token Detected'
+            : '🚀 New Token Detected';
 
         const liq = liquidity?.totalBUSD || 0;
         const price = liquidity?.price || 0;
@@ -117,7 +115,8 @@ async function initTelegram() {
 📈 <b>Momentum:</b> ${(raw?.momentum * 100 || 0).toFixed(2)}%
 👤 <b>Dev Holding:</b> ${devHold}%
 🧠 <b>Score:</b> ${scoreLabel} (${scoreValue})
-🧨 <b>Honeypot:</b> ${isHoneypot ? '⚠️ YES — RISK!' : '✅ NO — Safe'}
+🧨 <b>Honeypot:</b> ${honeypot ? '⚠️ YES — RISK!' : '✅ NO — Safe'}
+${isTrending ? '🔥 This token is trending on GeckoTerminal!' : ''}
 
 #memecoin #scanner
 `;
