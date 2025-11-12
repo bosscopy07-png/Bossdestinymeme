@@ -3,7 +3,7 @@ const { Telegraf } = require('telegraf');
 const fs = require('fs');
 const dotenv = require('dotenv');
 const { paperBuy, paperSell, load } = require('./papertrader');
-const { fetchTrendingPairs } = require('./geckoterminal');
+const { fetchGeckoTrending } = require('./scanner'); // ✅ Use scanner.js for GeckoTerminal fetch
 
 dotenv.config();
 
@@ -85,9 +85,9 @@ async function initTelegram() {
       try {
         if (!CHAT_ID) throw new Error('TELEGRAM_CHAT_ID missing');
 
-        // ✅ Use GeckoTerminal trending validation
-        const pairs = await fetchTrendingPairs();
-        const exists = pairs.some(p => p.token?.toLowerCase() === token0?.toLowerCase());
+        // ✅ Validate using GeckoTerminal trending fetch
+        const trendingPairs = await fetchGeckoTrending();
+        const exists = trendingPairs.some(p => p.token0?.toLowerCase() === token0?.toLowerCase());
 
         if (!exists) {
           console.warn(`⚠️ Skipping signal: ${token0} not in GeckoTerminal trending list`);
