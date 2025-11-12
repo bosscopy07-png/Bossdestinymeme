@@ -1,9 +1,9 @@
-// src/telegram.js
+l// src/telegram.js
 const { Telegraf } = require('telegraf');
 const fs = require('fs');
 const dotenv = require('dotenv');
 const { paperBuy, paperSell, load } = require('./papertrader');
-const { fetchGeckoTrending, fetchNewPairs } = require('./scanner'); // now using both
+const { fetchGeckoTrending, fetchNewPairs } = require('./scanner');
 
 dotenv.config();
 
@@ -94,7 +94,6 @@ async function initTelegram() {
       try {
         if (!CHAT_ID) throw new Error('TELEGRAM_CHAT_ID missing');
 
-        // ✅ Validate if trending
         const trendingPairs = await fetchGeckoTrending();
         const isTrending = trendingPairs.some(p => p.token0?.toLowerCase() === token0?.toLowerCase());
 
@@ -153,7 +152,7 @@ ${isTrending ? '🔥 This token is trending on GeckoTerminal!' : ''}
           await bot.telegram.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML', reply_markup });
         }
 
-        await new Promise(r => setTimeout(r, 1500)); // cooldown
+        await new Promise(r => setTimeout(r, 1500));
       } catch (error) {
         console.error('❌ tg.sendSignal failed:', error.message);
       }
@@ -161,61 +160,5 @@ ${isTrending ? '🔥 This token is trending on GeckoTerminal!' : ''}
   };
 }
 
-// === Auto Hybrid Switching System ===
-async function startHybridScanner(sendSignal) {
-  const seenPairs = new Set();
-
-  while (true) {
-    try {
-      console.log("🚀 Fetching trending tokens...");
-      const trending = await fetchGeckoTrending();
-      const top3 = trending.slice(0, 3);
-
-      for (const t of top3) {
-        if (seenPairs.has(t.pairAddress)) continue;
-        seenPairs.add(t.pairAddress);
-        await sendSignal({
-          token0: t.token0,
-          token1: t.token1,
-          pair: t.pairAddress,
-          liquidity: t.liquidity || {},
-          honeypot: false,
-          scoreLabel: "Trending",
-          scoreValue: 85,
-          raw: t,
-        });
-      }
-
-      console.log("🌱 Switching to new on-chain pairs...");
-      const newPairs = await fetchNewPairs();
-      const topNew = newPairs.slice(0, 2);
-
-      for (const n of topNew) {
-        if (seenPairs.has(n.pairAddress)) continue;
-        seenPairs.add(n.pairAddress);
-        await sendSignal({
-          token0: n.token0,
-          token1: n.token1,
-          pair: n.pairAddress,
-          liquidity: n.liquidity || {},
-          honeypot: n.honeypot || false,
-          scoreLabel: "New Launch",
-          scoreValue: 75,
-          raw: n,
-        });
-      }
-
-      console.log("🔁 Cycle complete — restarting...");
-      await new Promise(r => setTimeout(r, 8000));
-    } catch (err) {
-      console.error("⚠️ Hybrid cycle error:", err.message);
-      await new Promise(r => setTimeout(r, 5000));
-    }
-  }
-}
-
-// === Run System ===
-(async () => {
-  const tg = await initTelegram();
-  startHybridScanner(tg.sendSignal);
-})();
+// === Export functions for external use ===
+module.exports = { initTelegram };
