@@ -10,7 +10,6 @@ const ROUTER = process.env.PANCAKE_ROUTER || '0x10ED43C718714eb63d5aA57B78B54704
 const BUSD_ADDRESS = process.env.BUSD_ADDRESS;
 
 const MIN_LIQ_BUSD = parseFloat(process.env.MIN_LIQ_BUSD || '20');
-const MAX_DEV_SHARE = parseFloat(process.env.MAX_DEV_SHARE || '0.2');
 const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL || '70000');
 
 let seenPairs = new Set();
@@ -42,7 +41,7 @@ async function fetchGeckoTrending() {
         token1Addr: quote.address,
         price: parseFloat(attrs.base_token_price_usd || 0),
         liquidity: parseFloat(attrs.reserve_in_usd || 0),
-        momentum: parseFloat(attrs.price_change_percentage.h24 || 0) / 100,
+        momentum: parseFloat(attrs.price_change_percentage?.h24 || 0) / 100,
       };
     });
 
@@ -53,7 +52,13 @@ async function fetchGeckoTrending() {
   return tokens;
 }
 
-// === On-chain scanner ===
+// === Compatibility Wrapper ===
+// (Fixes “fetchTrendingPairs is not a function”)
+async function fetchTrendingPairs() {
+  return await fetchGeckoTrending();
+}
+
+// === On-chain + Gecko Scanner ===
 async function startScanner(bot, logger = console) {
   tgBot = bot;
   logger.info('🛰 Starting Hybrid Scanner (On-chain + GeckoTerminal)…');
@@ -82,7 +87,6 @@ async function startScanner(bot, logger = console) {
   const erc20Abi = [
     { constant: true, inputs: [], name: 'totalSupply', outputs: [{ name: '', type: 'uint256' }], type: 'function' },
     { constant: true, inputs: [{ name: '_owner', type: 'address' }], name: 'balanceOf', outputs: [{ name: 'balance', type: 'uint256' }], type: 'function' },
-    { constant: true, inputs: [], name: 'decimals', outputs: [{ name: '', type: 'uint8' }], type: 'function' },
   ];
 
   const pairAbi = [
@@ -193,7 +197,7 @@ async function startScanner(bot, logger = console) {
 💧 <b>Liquidity:</b> $${t.liquidity.toLocaleString(undefined, { maximumFractionDigits: 2 })}
 💵 <b>Price:</b> $${t.price.toFixed(8)}
 📈 <b>Momentum:</b> ${(t.momentum * 100).toFixed(2)}%
-👤 <b>Dev Holding:</b> ${0}%
+👤 <b>Dev Holding:</b> 0%
 🧠 <b>Score:</b> ${scoreLabel} (${scoreValue})
 🧨 <b>Honeypot:</b> ✅ NO — Safe
 `;
@@ -210,4 +214,4 @@ async function startScanner(bot, logger = console) {
   logger.info('✅ Hybrid Scanner (on-chain + GeckoTerminal) running…');
 }
 
-module.exports = { startScanner };
+module.exports = { startScanner, fetchTrendingPairs, fetchGeckoTrending };
