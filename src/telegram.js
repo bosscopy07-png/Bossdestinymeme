@@ -174,6 +174,9 @@ ${isTrending ? '🔥 This token is trending on GeckoTerminal!' : ''}
 }
 
 // === Hybrid Scanner ===
+const { fetchGeckoTrending, fetchNewPairs } = require('./scanner');
+const { getTokenMeta } = require('./utils'); // make sure utils.js exports getTokenMeta
+
 async function startHybridScanner(sendSignal) {
   const seenPairs = new Set();
 
@@ -187,7 +190,16 @@ async function startHybridScanner(sendSignal) {
         if (seenPairs.has(t.pairAddress)) continue;
         seenPairs.add(t.pairAddress);
 
+        // Fetch on-chain token meta
         const meta = await getTokenMeta(t.token0, process.env.RPC_HTTP);
+
+        const price = t.liquidity?.price || t.price || 0;
+        const liq = t.liquidity?.totalBUSD || 0;
+        const momentum = t.momentum ? (t.momentum * 100).toFixed(2) : 0;
+        let devHold = 'N/A';
+        if (meta?.ownerBalance && meta?.totalSupply) {
+          devHold = ((Number(meta.ownerBalance) / Number(meta.totalSupply)) * 100).toFixed(2);
+        }
 
         await sendSignal({
           token0: t.token0,
@@ -199,12 +211,13 @@ async function startHybridScanner(sendSignal) {
           scoreValue: 85,
           raw: {
             ...t,
-            name: meta?.name,
-            symbol: meta?.symbol,
+            name: meta?.name || t.token0,
+            symbol: meta?.symbol || t.token0,
             ownerBalance: meta?.ownerBalance,
             totalSupply: meta?.totalSupply,
-            momentum: t.momentum || 0,
-            price: t.liquidity?.price || 0
+            price,
+            momentum,
+            devHold
           }
         });
       }
@@ -217,7 +230,16 @@ async function startHybridScanner(sendSignal) {
         if (seenPairs.has(n.pairAddress)) continue;
         seenPairs.add(n.pairAddress);
 
+        // Fetch on-chain token meta
         const meta = await getTokenMeta(n.token0, process.env.RPC_HTTP);
+
+        const price = n.liquidity?.price || n.price || 0;
+        const liq = n.liquidity?.totalBUSD || 0;
+        const momentum = n.momentum ? (n.momentum * 100).toFixed(2) : 0;
+        let devHold = 'N/A';
+        if (meta?.ownerBalance && meta?.totalSupply) {
+          devHold = ((Number(meta.ownerBalance) / Number(meta.totalSupply)) * 100).toFixed(2);
+        }
 
         await sendSignal({
           token0: n.token0,
@@ -229,12 +251,13 @@ async function startHybridScanner(sendSignal) {
           scoreValue: 75,
           raw: {
             ...n,
-            name: meta?.name,
-            symbol: meta?.symbol,
+            name: meta?.name || n.token0,
+            symbol: meta?.symbol || n.token0,
             ownerBalance: meta?.ownerBalance,
             totalSupply: meta?.totalSupply,
-            momentum: n.momentum || 0,
-            price: n.liquidity?.price || 0
+            price,
+            momentum,
+            devHold
           }
         });
       }
@@ -249,5 +272,5 @@ async function startHybridScanner(sendSignal) {
   }
 }
 
-// === Export functions for external use ===
-module.exports = { initTelegram, startHybridScanner };
+module.exports = { startHybridScanner };
+  
