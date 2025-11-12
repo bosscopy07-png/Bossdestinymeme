@@ -52,13 +52,12 @@ async function fetchGeckoTrending() {
   return tokens;
 }
 
-// === Compatibility Wrapper ===
-// (Fixes “fetchTrendingPairs is not a function”)
+// Compatibility wrapper
 async function fetchTrendingPairs() {
   return await fetchGeckoTrending();
 }
 
-// === On-chain + Gecko Scanner ===
+// === Scanner ===
 async function startScanner(bot, logger = console) {
   tgBot = bot;
   logger.info('🛰 Starting Hybrid Scanner (On-chain + GeckoTerminal)…');
@@ -107,11 +106,9 @@ async function startScanner(bot, logger = console) {
       const reserves = await pair.methods.getReserves().call();
 
       let busdReserve = 0;
-      if (token0Addr.toLowerCase() === BUSD_ADDRESS.toLowerCase()) {
-        busdReserve = reserves._reserve0 / 1e18;
-      } else if (token1Addr.toLowerCase() === BUSD_ADDRESS.toLowerCase()) {
-        busdReserve = reserves._reserve1 / 1e18;
-      }
+      if (token0Addr.toLowerCase() === BUSD_ADDRESS.toLowerCase()) busdReserve = reserves._reserve0 / 1e18;
+      else if (token1Addr.toLowerCase() === BUSD_ADDRESS.toLowerCase()) busdReserve = reserves._reserve1 / 1e18;
+
       return busdReserve;
     } catch {
       return 0;
@@ -124,7 +121,6 @@ async function startScanner(bot, logger = console) {
         [{ constant: false, inputs: [{ internalType: 'uint256', name: 'amountIn', type: 'uint256' }, { internalType: 'address[]', name: 'path', type: 'address[]' }], name: 'getAmountsOut', outputs: [{ internalType: 'uint256[]', name: '', type: 'uint256[]' }], payable: false, stateMutability: 'view', type: 'function' }],
         ROUTER
       );
-
       const amountIn = web3.utils.toWei(amountBUSD.toString(), 'ether');
       const path = [BUSD_ADDRESS, tokenAddress];
       const amounts = await router.methods.getAmountsOut(amountIn, path).call();
@@ -174,7 +170,16 @@ async function startScanner(bot, logger = console) {
 `;
 
       logger.info(`🚀 New pair detected: ${token0}/${token1}`);
-      await tgBot.sendSignal({ message });
+      await tgBot.sendSignal({
+        token0,
+        token1,
+        pair,
+        liquidity: { totalBUSD: liq, price: 0 },
+        honeypot: isHoneypot,
+        scoreLabel,
+        scoreValue,
+        raw: { token0, token1, pair }
+      });
     })
     .on('error', (err) => logger.error('PairCreated listener error:', err));
 
@@ -203,7 +208,16 @@ async function startScanner(bot, logger = console) {
 `;
 
       logger.info(`🔥 Trending token: ${t.token0} ($${t.liquidity.toFixed(2)})`);
-      await tgBot.sendSignal({ message });
+      await tgBot.sendSignal({
+        token0: t.token0,
+        token1: t.token1,
+        pair: t.pairAddress,
+        liquidity: { totalBUSD: t.liquidity, price: t.price },
+        honeypot: false,
+        scoreLabel,
+        scoreValue,
+        raw: t
+      });
       await sleep(1500);
     }
   };
@@ -211,7 +225,7 @@ async function startScanner(bot, logger = console) {
   await pollGecko();
   setInterval(pollGecko, POLL_INTERVAL);
 
-  logger.info('✅ Hybrid Scanner (on-chain + GeckoTerminal) running…');
+  logger.info('✅ Hybrid Scanner running…');
 }
 
 module.exports = { startScanner, fetchTrendingPairs, fetchGeckoTrending };
