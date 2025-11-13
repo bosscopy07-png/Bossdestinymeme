@@ -20,16 +20,14 @@ async function initTelegram() {
 
   bot = new Telegraf(BOT_TOKEN);
 
-  // Start message
   bot.start(ctx => ctx.reply('🤖 Memecoin Scanner PRO connected and ready ✅'));
 
-  // Error handler
   bot.catch((err, ctx) => {
     console.error('[Telegram Error]', err);
     if (ctx?.update?.message) console.log('Failed message:', ctx.update.message.text);
   });
 
-  // Inline actions
+  // Inline buttons
   bot.action(/buy_(.+)/, async ctx => {
     const id = ctx.match[1];
     const payload = signalStore.get(id);
@@ -74,7 +72,7 @@ async function initTelegram() {
     await ctx.reply(`📋 Recent Trades:\n${top}`);
   });
 
-  // Launch
+  // Launch bot
   try {
     if (process.env.RENDER === 'true' && process.env.RENDER_EXTERNAL_URL) {
       const domain = process.env.RENDER_EXTERNAL_URL;
@@ -89,19 +87,18 @@ async function initTelegram() {
     console.error('❌ Telegram launch failed:', err);
   }
 
-  // === sendSignal function ===
+  // === sendSignal function (fully fixed) ===
   return {
     sendSignal: async ({ token0, token1, pair, liquidity, honeypot, imgPath, scoreLabel, scoreValue, raw }) => {
       try {
         if (!CHAT_ID) throw new Error('TELEGRAM_CHAT_ID missing');
 
-        // Fetch meta
         const meta = await getTokenMeta(token0, process.env.RPC_HTTP);
         const tokenName = meta?.name || token0 || 'Unknown';
         const tokenSymbol = meta?.symbol || token0 || 'UNKNOWN';
         const devHold = meta?.ownerBalance && meta?.totalSupply
           ? ((Number(meta.ownerBalance) / Number(meta.totalSupply)) * 100).toFixed(2)
-          : 'N/A';
+          : '0';
         const price = liquidity?.price || raw?.price || 0;
         const liq = liquidity?.totalBUSD || raw?.liquidity?.totalBUSD || 0;
         const momentum = raw?.momentum ? (raw.momentum * 100).toFixed(2) : 0;
@@ -109,6 +106,11 @@ async function initTelegram() {
         // Trending check
         const trendingPairs = await fetchGeckoTrending();
         const isTrending = trendingPairs.some(p => p.token0?.toLowerCase() === token0?.toLowerCase());
+
+        // Compute fallback score if missing
+        if (!scoreValue) {
+          scoreValue = Math.max(0, Math.min(100, Math.round(momentum + liq / 10 - devHold)));
+        }
 
         const alertEmoji = honeypot ? '🔴' : '🟢';
         const alertTitle = honeypot
@@ -158,7 +160,7 @@ ${isTrending ? '🔥 This token is trending on GeckoTerminal!' : ''}
           await bot.telegram.sendMessage(CHAT_ID, msg, { parse_mode: 'HTML', reply_markup });
         }
 
-        await new Promise(r => setTimeout(r, 1500)); // cooldown
+        await new Promise(r => setTimeout(r, 1500));
       } catch (error) {
         console.error('❌ tg.sendSignal failed:', error.message);
       }
@@ -241,5 +243,4 @@ async function startHybridScanner(sendSignal) {
   }
 }
 
-// === Export both functions ===
 module.exports = { initTelegram, startHybridScanner };
