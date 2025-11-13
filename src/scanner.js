@@ -406,5 +406,46 @@ module.exports = {
   startScanner,
   fetchTrendingPairs,
   fetchGeckoTrending,
-  fetchNewPairs,
+  fetchNewPairs: () => {
+    // merge trending + new pairs into one unified batch for telegram
+    const combined = [];
+
+    // pull trending pairs first
+    while (combined.length < 3 && trendingQueue.length) {
+      const t = trendingQueue.shift();
+      if (!t) break;
+      combined.push({
+        pairAddress: t.pair,
+        token0: t.token0,
+        token1: t.token1,
+        liquidity: { totalBUSD: t.liquidity, price: t.price },
+        honeypot: t.honeypot,
+        momentum: t.momentum,
+        devHold: t.devHold,
+        scoreLabel: t.scoreLabel,
+        scoreValue: t.scoreValue,
+        profitPotential: ((t.momentum * 100) + (t.liquidity / 1000)).toFixed(2)
+      });
+    }
+
+    // add a few new pairs if any
+    while (combined.length < 5 && newPairsQueue.length) {
+      const n = newPairsQueue.shift();
+      if (!n) break;
+      combined.push({
+        pairAddress: n.pair,
+        token0: n.token0,
+        token1: n.token1,
+        liquidity: { totalBUSD: n.liquidity, price: n.price },
+        honeypot: n.honeypot,
+        momentum: n.momentum,
+        devHold: n.devHold,
+        scoreLabel: n.scoreLabel,
+        scoreValue: n.scoreValue,
+        profitPotential: ((n.momentum * 100) + (n.liquidity / 1000)).toFixed(2)
+      });
+    }
+
+    return combined;
+  }
 };
