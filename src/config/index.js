@@ -8,6 +8,7 @@ module.exports = {
   FACTORY: process.env.PANCAKE_FACTORY,
   ROUTER: process.env.PANCAKE_ROUTER,
   BUSD_ADDRESS: process.env.BUSD_ADDRESS,
+  TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,  // <-- add this
   TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID,
   LIVE_TRADER: (process.env.LIVE_TRADER === 'true') || false,
   PRIVATE_KEY: process.env.PRIVATE_KEY || null,
