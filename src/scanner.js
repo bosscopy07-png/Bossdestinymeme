@@ -1,5 +1,6 @@
 // src/scanner.js
 // Hybrid Sequential Scanner (On-chain PairCreated + GeckoTerminal trending)
+// Exports: startScanner(bot, logger), fetchGeckoTrending(), fetchTrendingPairs(), fetchNewPairs()
 
 const fs = require('fs');
 const path = require('path');
@@ -37,8 +38,10 @@ function loadSeen() {
     if (fs.existsSync(SEEN_PERSIST_PATH)) {
       const raw = fs.readFileSync(SEEN_PERSIST_PATH, 'utf8');
       const arr = JSON.parse(raw);
-      if (Array.isArray(arr)) seenPairs = new Set(arr);
-      console.info(`♻️ Loaded ${arr.length} seen pair(s) from disk.`);
+      if (Array.isArray(arr)) {
+        seenPairs = new Set(arr);
+        console.info(`♻️ Loaded ${arr.length} seen pair(s) from disk.`);
+      }
     }
   } catch (e) {
     console.warn('⚠️ Could not load seen pairs file:', e.message);
@@ -57,10 +60,6 @@ function saveSeen() {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const safeFloat = (v, d = 0) => {
   const n = parseFloat(v);
-  return Number.isFinite(n) ? n : d;
-};
-const safeInt = (v, d = 0) => {
-  const n = parseInt(v);
   return Number.isFinite(n) ? n : d;
 };
 
@@ -101,25 +100,9 @@ async function fetchGeckoTrending() {
   return [];
 }
 
+/* compatibility wrapper */
 async function fetchTrendingPairs() {
   return await fetchGeckoTrending();
-}
-
-/* ------------- Read-only new pairs fetch ------------- */
-async function fetchNewPairs() {
-  return newPairsQueue.slice(0, NEWPAIR_BATCH).map(p => ({
-    pairAddress: p.pair,
-    token0: p.token0,
-    token1: p.token1,
-    token0Addr: p.token0Addr,
-    token1Addr: p.token1Addr,
-    liquidity: { totalBUSD: p.liquidity, price: p.price },
-    honeypot: p.honeypot,
-    momentum: p.momentum,
-    devHold: p.devHold,
-    scoreLabel: p.scoreLabel,
-    scoreValue: p.scoreValue,
-  }));
 }
 
 /* ------------- On-chain helpers (web3) ------------- */
@@ -150,7 +133,7 @@ async function getLiquidityBUSD(web3, pairAddress) {
     if (token0Addr === BUSD_ADDRESS.toLowerCase()) busdReserve = safeFloat(reserves._reserve0) / SAFE_DECIMALS;
     else if (token1Addr === BUSD_ADDRESS.toLowerCase()) busdReserve = safeFloat(reserves._reserve1) / SAFE_DECIMALS;
     return busdReserve;
-  } catch (e) {
+  } catch {
     return 0;
   }
 }
@@ -190,6 +173,31 @@ function computeScore({ momentum = 0, liquidity = 0, devHold = 0 }) {
   return Math.max(0, Math.min(100, raw));
 }
 
+/* ------------- Public helper: fetchNewPairs() -------------
+   returns up to NEWPAIR_BATCH items and removes them from queue (so telegram consumes)
+*/
+function fetchNewPairs() {
+  const out = [];
+  for (let i = 0; i < NEWPAIR_BATCH && newPairsQueue.length; i++) {
+    const p = newPairsQueue.shift();
+    if (!p) break;
+    out.push({
+      pairAddress: p.pair,
+      token0: p.token0,
+      token1: p.token1,
+      token0Addr: p.token0Addr,
+      token1Addr: p.token1Addr,
+      liquidity: { totalBUSD: p.liquidity, price: p.price },
+      honeypot: p.honeypot,
+      momentum: p.momentum,
+      devHold: p.devHold,
+      scoreLabel: p.scoreLabel,
+      scoreValue: p.scoreValue,
+    });
+  }
+  return out;
+}
+
 /* ------------- Core: startScanner ------------- */
 async function startScanner(bot, logger = console) {
   tgBot = bot;
@@ -215,7 +223,7 @@ async function startScanner(bot, logger = console) {
         FACTORY
       );
     } catch (e) {
-      logger.error('❌ Could not create web3 or factory contract:', e.message);
+      logger.error('❌ Could not create web3 or factory contract:', e.message || e);
       web3 = null;
       factoryContract = null;
     }
@@ -232,22 +240,38 @@ async function startScanner(bot, logger = console) {
           const honeypot = !(await checkHoneypot(web3, token0)) || !(await checkHoneypot(web3, token1));
           const devHoldPercent = Number(((await getDevShare(web3, token0, pair)) * 100).toFixed(2));
           const scoreValue = computeScore({ momentum: 0, liquidity: liq, devHold: devHoldPercent });
+
           newPairsQueue.push({
-            type: 'new', token0, token1, token0Addr: token0, token1Addr: token1,
-            pair, liquidity: liq, price: 0, momentum: 0, devHold: devHoldPercent,
-            honeypot, scoreLabel: 'New Launch', scoreValue
+            type: 'new',
+            token0,
+            token1,
+            token0Addr: token0,
+            token1Addr: token1,
+            pair,
+            liquidity: liq,
+            price: 0,
+            momentum: 0,
+            devHold: devHoldPercent,
+            honeypot,
+            scoreLabel: 'New Launch',
+            scoreValue
           });
+
+          // mark seen early to avoid duplicate notification from gecko
           seenPairs.add(pair);
           saveSeen();
           logger.info(`🆕 Queued new pair ${token0}/${token1} (${pair}) liquidity $${liq.toFixed(2)}`);
         } catch (err) {
-          logger.warn('⚠️ PairCreated handler error:', err.message || err);
+          logger.warn('⚠️ PairCreated handler error:', (err && err.message) || err);
         }
       })
       .on('error', (err) => {
-        logger.error('PairCreated listener error:', err?.message || err);
+        logger.error('PairCreated listener error:', (err && err.message) || err);
       });
+
     logger.info('✅ On-chain PairCreated listener registered.');
+  } else {
+    logger.warn('⚠️ On-chain PairCreated listener not active (missing BSC_WS or FACTORY).');
   }
 
   async function pollGeckoAndEnrich() {
@@ -262,67 +286,117 @@ async function startScanner(bot, logger = console) {
           try {
             devHold = Number(((await getDevShare(web3, t.token0Addr, t.pairAddress)) * 100).toFixed(2));
             honeypot = !(await checkHoneypot(web3, t.token0Addr));
-          } catch { devHold = 0; honeypot = false; }
+          } catch {
+            devHold = 0;
+            honeypot = false;
+          }
         }
         const scoreValue = computeScore({ momentum: t.momentum, liquidity: t.liquidity, devHold });
         trendingQueue.push({
-          type: 'trending', token0: t.token0, token1: t.token1,
-          token0Addr: t.token0Addr, token1Addr: t.token1Addr,
-          pair: t.pairAddress, liquidity: t.liquidity, price: t.price,
-          momentum: t.momentum, devHold, honeypot, scoreLabel: 'Trending', scoreValue
+          type: 'trending',
+          token0: t.token0,
+          token1: t.token1,
+          token0Addr: t.token0Addr,
+          token1Addr: t.token1Addr,
+          pair: t.pairAddress,
+          liquidity: t.liquidity,
+          price: t.price,
+          momentum: t.momentum,
+          devHold,
+          honeypot,
+          scoreLabel: 'Trending',
+          scoreValue
         });
         await sleep(200);
       }
-    } catch (err) { logger.warn('⚠️ pollGeckoAndEnrich failed:', err.message || err); }
+    } catch (err) {
+      logger.warn('⚠️ pollGeckoAndEnrich failed:', (err && err.message) || err);
+    }
   }
 
   async function sequentialSender() {
+    logger.info('🔁 Sequential sender loop started.');
     while (true) {
       try {
+        // send trending batch
         for (let i = 0; i < TRENDING_BATCH && trendingQueue.length; i++) {
           const item = trendingQueue.shift();
-          if (!item || seenPairs.has(item.pair)) continue;
+          if (!item) break;
+          if (seenPairs.has(item.pair)) continue;
+
+          const isHoneypot = !!item.honeypot;
+          const label = item.honeypot ? `${item.scoreLabel} (RISKY)` : item.scoreLabel;
+
           await safeSend({
-            token0: item.token0, token1: item.token1, pair: item.pair,
+            token0: item.token0,
+            token1: item.token1,
+            pair: item.pair,
             liquidity: { totalBUSD: item.liquidity, price: item.price || 0 },
-            honeypot: item.honeypot, scoreLabel: item.scoreLabel, scoreValue: item.scoreValue,
+            honeypot: isHoneypot,
+            scoreLabel: label,
+            scoreValue: item.scoreValue,
             raw: item
           }, logger);
+
           seenPairs.add(item.pair);
           saveSeen();
           await sleep(SEND_COOLDOWN_MS);
         }
 
+        // send new pairs batch (these are queued by PairCreated listener)
         for (let i = 0; i < NEWPAIR_BATCH && newPairsQueue.length; i++) {
           const item = newPairsQueue.shift();
-          if (!item || seenPairs.has(item.pair)) continue;
+          if (!item) break;
+          if (seenPairs.has(item.pair)) continue;
+
+          const label = item.honeypot ? `${item.scoreLabel} (RISKY)` : item.scoreLabel;
+
           await safeSend({
-            token0: item.token0, token1: item.token1, pair: item.pair,
+            token0: item.token0,
+            token1: item.token1,
+            pair: item.pair,
             liquidity: { totalBUSD: item.liquidity, price: item.price || 0 },
-            honeypot: item.honeypot, scoreLabel: item.scoreLabel, scoreValue: item.scoreValue,
+            honeypot: item.honeypot,
+            scoreLabel: label,
+            scoreValue: item.scoreValue,
             raw: item
           }, logger);
+
           seenPairs.add(item.pair);
           saveSeen();
           await sleep(SEND_COOLDOWN_MS);
         }
+
         await sleep(CYCLE_PAUSE_MS);
-      } catch (loopErr) { logger.error('🔴 sequentialSender loop error:', loopErr?.message || loopErr); await sleep(2000); }
+      } catch (loopErr) {
+        logger.error('🔴 sequentialSender loop error:', (loopErr && loopErr.message) || loopErr);
+        await sleep(2000);
+      }
     }
   }
 
   async function safeSend(signal, logger) {
     try {
-      if (!tgBot || typeof tgBot.sendSignal !== 'function') { logger.warn('⚠️ Telegram bot not initialized or sendSignal missing — skipping send.'); return; }
+      if (!tgBot || typeof tgBot.sendSignal !== 'function') {
+        logger.warn('⚠️ Telegram bot not initialized or sendSignal missing — skipping send.');
+        return;
+      }
       signal.raw = Object.assign({}, signal.raw || {}, { sentAt: new Date().toISOString() });
       await tgBot.sendSignal(signal);
       logger.info(`📨 Sent signal: ${signal.token0}/${signal.token1} (${signal.pair}) score:${signal.scoreValue}`);
-    } catch (err) { logger.error('❌ safeSend failed:', err?.message || err); }
+    } catch (err) {
+      logger.error('❌ safeSend failed:', (err && err.message) || err);
+    }
   }
 
-  await pollGeckoAndEnrich().catch(e => logger.warn('initial pollGeckoAndEnrich failed', e?.message || e));
-  setInterval(() => { pollGeckoAndEnrich().catch(e => logger.warn('pollGeckoAndEnrich failed', e?.message || e)); }, POLL_INTERVAL);
-  sequentialSender().catch(e => logger.error('sequentialSender top-level error', e?.message || e));
+  // initial gecko poll + schedule
+  await pollGeckoAndEnrich().catch((e) => logger.warn('initial pollGeckoAndEnrich failed', (e && e.message) || e));
+  setInterval(() => {
+    pollGeckoAndEnrich().catch((e) => logger.warn('pollGeckoAndEnrich failed', (e && e.message) || e));
+  }, POLL_INTERVAL);
+
+  // start sender loop
+  sequentialSender().catch((e) => logger.error('sequentialSender top-level error', (e && e.message) || e));
 
   logger.info('✅ Hybrid Sequential Scanner running.');
 }
