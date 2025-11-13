@@ -1,3 +1,8 @@
-require('dotenv').config();
-const { run } = require('./scanner/index');
-run(console).catch(e=>{ console.error('fatal', e); process.exit(1); });
+// src/index.js
+const { startScanner } = require('./scanner');
+const { initBot } = require('./telegram/bot');
+
+(async () => {
+  const bot = await initBot();
+  await startScanner(bot);
+})();
