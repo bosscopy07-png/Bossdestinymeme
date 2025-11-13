@@ -20,14 +20,11 @@ const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL || '70000', 10);
 const TRENDING_BATCH = parseInt(process.env.TRENDING_BATCH || '3', 10);
 const NEWPAIR_BATCH = parseInt(process.env.NEWPAIR_BATCH || '2', 10);
 const SEND_COOLDOWN_MS = parseInt(process.env.SEND_COOLDOWN_MS || '1500', 10);
-const CYCLE_PAUSE_MS = parseInt(process.env.CYCLE_PAUSE_MS || '2000', 10);
 const SEEN_PERSIST_PATH = process.env.SEEN_PERSIST_PATH || path.join(__dirname, '..', 'seen_pairs.json');
 const GECKO_TIMEOUT = parseInt(process.env.GECKO_TIMEOUT || '10000', 10);
 
 /* ----------- State ----------- */
 let seenPairs = new Set();
-let trendingQueue = [];
-let newPairsQueue = [];
 let tgBot = null;
 let signalStore = new Map();
 
@@ -107,7 +104,7 @@ async function checkHoneypot(web3, tokenAddress) {
   try {
     if (!BUSD_ADDRESS) return false;
     const router = new web3.eth.Contract([{ constant: false, inputs: [{ internalType: 'uint256', name: 'amountIn', type: 'uint256' }, { internalType: 'address[]', name: 'path', type: 'address[]' }], name: 'getAmountsOut', outputs: [{ internalType: 'uint256[]', name: '', type: 'uint256[]' }], payable: false, stateMutability: 'view', type: 'function' }], ROUTER);
-    const amounts = await router.methods.getAmountsOut(Web3.utils.toWei('0.1', 'ether'), [BUSD_ADDRESS, tokenAddress]).call();
+    const amounts = await router.methods.getAmountsOut(Web3.utils.toWei('0.1','ether'), [BUSD_ADDRESS, tokenAddress]).call();
     return safeFloat(amounts[1],0) > 0;
   } catch { return false; }
 }
@@ -133,10 +130,9 @@ async function initTelegram() {
   const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
   if (!BOT_TOKEN) throw new Error('❌ TELEGRAM_BOT_TOKEN not set');
   tgBot = new Telegraf(BOT_TOKEN);
-
   tgBot.start(ctx => ctx.reply('🤖 Memecoin Scanner PRO connected ✅'));
   await tgBot.launch();
-  console.log('✅ Telegram bot launched in polling mode');
+  console.log('✅ Telegram bot launched');
 }
 
 /* ----------- Signal Sender ----------- */
@@ -154,9 +150,7 @@ async function sendSignal({ token0, token1, pair, liquidity, honeypot, scoreLabe
   const momentum = raw?.momentum ? (raw.momentum*100).toFixed(2) : 0;
 
   const alertEmoji = honeypot ? '🔴' : '🟢';
-  const alertTitle = honeypot
-    ? '⚠️ Possible Honeypot Detected'
-    : raw.type === 'trending' ? '🚀 Trending Token' : '🌱 New Token';
+  const alertTitle = honeypot ? '⚠️ Possible Honeypot' : raw.type==='trending' ? '🚀 Trending Token' : '🌱 New Token';
 
   const msg = `<b>${alertEmoji} ${alertTitle}</b>
 💠 <b>Token:</b> ${tokenName} (${tokenSymbol})
@@ -184,27 +178,57 @@ async function startScanner() {
 
   let web3 = null;
   if (BSC_WS && FACTORY) {
-    try { web3 = createWeb3(); } catch {}
+    try { web3 = createWeb3(); } catch { console.warn('⚠️ Web3 init failed'); }
   }
 
-  // Start polling Gecko & sending
-  while(true) {
+  // --- Send last N existing pairs on startup ---
+  if (web3 && FACTORY) {
     try {
-      // --- Trending ---
+      const factory = new web3.eth.Contract([ { constant:true, inputs:[], name:'allPairsLength', outputs:[{type:'uint256', name:''}], type:'function' },
+                                            { constant:true, inputs:[{type:'uint256', name:''}], name:'allPairs', outputs:[{type:'address', name:''}], type:'function' }], FACTORY);
+
+      const length = parseInt(await factory.methods.allPairsLength().call(),10);
+      const start = Math.max(0,length-NEWPAIR_BATCH);
+
+      for(let i=start;i<length;i++){
+        const pairAddr = await factory.methods.allPairs(i).call();
+        if(seenPairs.has(pairAddr)) continue;
+
+        const pairContract = new web3.eth.Contract(pairAbi, pairAddr);
+        const token0 = await pairContract.methods.token0().call();
+        const token1 = await pairContract.methods.token1().call();
+        const liq = await getLiquidityBUSD(web3,pairAddr);
+        if(liq<MIN_LIQ_BUSD) continue;
+
+        const honeypot = !(await checkHoneypot(web3,token0));
+        const devHold = Number((await getDevShare(web3,token0,pairAddr)*100).toFixed(2));
+        const score = computeScore({ liquidity:liq, devHold, momentum:0 });
+
+        await sendSignal({ token0, token1, pair:pairAddr, liquidity:{totalBUSD:liq, price:0}, honeypot, scoreLabel:'New Launch', scoreValue:score, type:'new' });
+        seenPairs.add(pairAddr);
+      }
+      saveSeen();
+    } catch(err){ console.error('⚠️ Initial new pair fetch failed:',err.message); }
+  }
+
+  // --- Start polling loop ---
+  while(true){
+    try{
+      // Trending
       const trending = await fetchGeckoTrending();
-      for (const t of trending.slice(0, TRENDING_BATCH)) {
-        if (!t.pairAddress || seenPairs.has(t.pairAddress) || t.liquidity<MIN_LIQ_BUSD) continue;
-        let devHold = 0, honeypot = false;
-        if (web3) { devHold = Number((await getDevShare(web3,t.token0Addr,t.pairAddress)*100).toFixed(2)); honeypot=!(await checkHoneypot(web3,t.token0Addr)); }
-        const score = computeScore({ momentum: t.momentum, liquidity: t.liquidity, devHold });
+      for(const t of trending.slice(0,TRENDING_BATCH)){
+        if(!t.pairAddress || seenPairs.has(t.pairAddress) || t.liquidity<MIN_LIQ_BUSD) continue;
+        let devHold=0, honeypot=false;
+        if(web3){ devHold=Number((await getDevShare(web3,t.token0Addr,t.pairAddress)*100).toFixed(2)); honeypot=!(await checkHoneypot(web3,t.token0Addr)); }
+        const score = computeScore({ momentum:t.momentum, liquidity:t.liquidity, devHold });
         await sendSignal({ ...t, honeypot, scoreLabel:'Trending', scoreValue:score });
         seenPairs.add(t.pairAddress);
       }
 
-      // --- New on-chain pairs ---
-      if (web3 && FACTORY) {
+      // Listen for future pairs
+      if(web3 && FACTORY){
         const factory = new web3.eth.Contract([{
-          anonymous: false,
+          anonymous:false,
           inputs:[
             { indexed:true, internalType:'address', name:'token0', type:'address' },
             { indexed:true, internalType:'address', name:'token1', type:'address' },
@@ -215,15 +239,15 @@ async function startScanner() {
         }], FACTORY);
 
         factory.events.PairCreated({ fromBlock:'latest' })
-          .on('data', async e => {
+          .on('data', async e=>{
             const { token0, token1, pair } = e.returnValues;
-            if (!pair || seenPairs.has(pair)) return;
+            if(!pair || seenPairs.has(pair)) return;
             const liq = await getLiquidityBUSD(web3,pair);
-            if (liq<MIN_LIQ_BUSD) return;
+            if(liq<MIN_LIQ_BUSD) return;
             const honeypot = !(await checkHoneypot(web3,token0));
             const devHold = Number((await getDevShare(web3,token0,pair)*100).toFixed(2));
             const score = computeScore({ liquidity:liq, devHold, momentum:0 });
-            await sendSignal({ token0, token1, pair, liquidity:{totalBUSD:liq,price:0}, honeypot, scoreLabel:'New Launch', scoreValue:score, type:'new' });
+            await sendSignal({ token0, token1, pair, liquidity:{totalBUSD:liq, price:0}, honeypot, scoreLabel:'New Launch', scoreValue:score, type:'new' });
             seenPairs.add(pair);
             saveSeen();
           })
@@ -231,10 +255,7 @@ async function startScanner() {
       }
 
       await sleep(POLL_INTERVAL);
-    } catch(err) {
-      console.error('🔴 Scanner loop error:', err.message);
-      await sleep(5000);
-    }
+    }catch(err){ console.error('🔴 Scanner loop error:',err.message); await sleep(5000);}
   }
 }
 
