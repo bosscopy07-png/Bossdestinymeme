@@ -1,26 +1,31 @@
-async function analyzeToken(pair) {
+export async function analyzeToken(pair) {
   try {
-    const liq = pair.liquidity?.usd || 0;
-    const vol = pair.volume?.h24 || 0;
-    const ageMins = (Date.now() - (pair.pairCreatedAt || Date.now())) / 60000;
+    if (!pair || typeof pair !== "object") return false;
 
-    if (liq < 25000) return false;
-    if (vol < 10000) return false;
-    if (ageMins > 120) return false;
+    const liquidityUsd = Number(pair?.liquidity?.usd || 0);
+    const volume24h = Number(pair?.volume?.h24 || 0);
+    const createdAt = Number(pair?.pairCreatedAt || Date.now());
+
+    const ageMinutes = Math.max(0, (Date.now() - createdAt) / 60000);
+
+    // --- Strict Filters ---
+    if (liquidityUsd < 25000) return false;
+    if (volume24h < 10000) return false;
+    if (ageMinutes > 120) return false;
+
+    const base = pair.baseToken || {};
 
     return {
-      token: pair.baseToken.name,
-      symbol: pair.baseToken.symbol,
-      address: pair.baseToken.address,
-      price: pair.priceUsd,
-      liquidity: liq,
-      volume: vol,
-      age: `${Math.floor(ageMins)}m`,
-      url: pair.url
+      token: base.name || "Unknown",
+      symbol: base.symbol || "",
+      address: base.address || "",
+      price: Number(pair?.priceUsd || 0),
+      liquidity: liquidityUsd,
+      volume: volume24h,
+      age: `${Math.floor(ageMinutes)}m`,
+      url: pair?.url || null
     };
-  } catch (e) {
+  } catch (err) {
     return false;
   }
 }
-
-module.exports = { analyzeToken };
