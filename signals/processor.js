@@ -1,27 +1,25 @@
 /**
- * signals/processor.js
+ * FILE: signals/processor.js
  *
- * Deep anti-rug heuristics and deterministic risk scoring.
- * Input: tokenAddress (string) and optional dexscreenerData (object)
- * Output: {
- *   id, token, score (0-100), riskLevel: LOW|MEDIUM|HIGH, flags:[], details:{}
- * }
+ * Hyper Beast Token / Pair Signal Processor
  *
- * Notes:
- * - This module is ESM-style (import/export) to match the rest of the codebase.
- * - It tries to be defensive about missing data and will fall back gracefully.
- * - It uses the retry helper (retry) exported from utils/web3.js if available.
+ * Computes anti-rug heuristics, owner concentration, liquidity/volume scoring,
+ * bytecode suspicious detection, honeypot checks, and generates enriched details
+ * for Telegram/trading bots.
+ *
+ * Returns: { id, token, score, riskLevel, flags, details }
  */
 
 import Pino from "pino";
+import { ethers } from "ethers";
+import axios from "axios";
 import config from "../config/index.js";
 import * as dsUtils from "../utils/dexscreener.js";
-import { getProvider, retry as web3Retry } from "../utils/web3.js";
-import axios from "axios";
+import { getProvider, withRetries } from "../utils/web3.js";
 
 const log = Pino({ level: config.LOG_LEVEL || "info" });
 
-// --- Small local helpers (uid and safe number parsing) ---
+// --- Helpers ---
 function uid(prefix = "") {
   return `${prefix}${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
 }
@@ -29,15 +27,11 @@ function toNumberSafe(v, fallback = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
-
-// --- risk level helper ---
 function riskFromScore(score) {
   if (score >= 75) return "LOW";
   if (score >= 45) return "MEDIUM";
   return "HIGH";
 }
-
-// --- bytecode heuristic flags ---
 function basicBytecodeFlags(bytecode = "") {
   const flags = [];
   const b = (bytecode || "").toLowerCase();
@@ -46,38 +40,17 @@ function basicBytecodeFlags(bytecode = "") {
     return flags;
   }
   const suspects = [
-    "mint",
-    "burn",
-    "blacklist",
-    "whitelist",
-    "settax",
-    "setfee",
-    "feepercent",
-    "maxtx",
-    "maxwallet",
-    "renounce",
-    "owner",
-    "onlyowner",
-    "lock",
-    "unlock",
-    "pause",
-    "swapandliquify",
-    "sniper",
-    "antibot",
-    "trading",
-    "transferOwnership",
-    "isExcludedFromFee"
+    "mint", "burn", "blacklist", "whitelist", "settax", "setfee", "maxtx", "maxwallet",
+    "renounce", "owner", "onlyowner", "lock", "unlock", "pause", "swapandliquify",
+    "sniper", "antibot", "trading", "transferownership", "isexcludedfromfee"
   ];
   for (const s of suspects) {
     if (b.includes(s.toLowerCase())) flags.push(`bytecode_contains_${s.toLowerCase()}`);
   }
   return flags;
 }
-
-// --- weighted score computation ---
 function computeWeightsScore(metrics = {}, weights = {}) {
-  let totalWeight = 0;
-  let sum = 0;
+  let totalWeight = 0, sum = 0;
   for (const k of Object.keys(weights)) {
     const w = Number(weights[k] ?? 0);
     totalWeight += w;
@@ -85,32 +58,16 @@ function computeWeightsScore(metrics = {}, weights = {}) {
     sum += m * w;
   }
   if (totalWeight <= 0) return 0;
-  const normalized = sum / totalWeight; // 0..1
-  return Math.round(Math.max(0, Math.min(1, normalized)) * 100);
+  return Math.round(Math.max(0, Math.min(1, sum / totalWeight)) * 100);
 }
 
-// liquidity-to-marketcap helper
-function estimateLiquidityToMcRatio(dexData = {}) {
-  try {
-    const liqUSD = toNumberSafe(dexData.liquidity?.usd ?? dexData.liquidity ?? 0);
-    const mc = toNumberSafe(dexData.marketCap ?? dexData.fdv ?? dexData.mc ?? 0);
-    if (!mc || mc <= 0) return 0;
-    return liqUSD / mc;
-  } catch (e) {
-    return 0;
-  }
-}
-
-/**
- * Non-invasive honeypot heuristic & bytecode inspection.
- * Returns { flags:[], details:{} }
- */
+// --- Honeypot & bytecode analysis ---
 async function honeypotHeuristic(dexData = {}, provider, tokenAddress) {
   const flags = [];
   const details = {};
   try {
     const liquidityUSD = toNumberSafe(dexData.liquidity?.usd ?? dexData.liquidity ?? 0);
-    const holders = toNumberSafe(dexData.holders ?? dexData.holderCount ?? dexData.holdersCount ?? 0);
+    const holders = toNumberSafe(dexData.holders ?? dexData.holderCount ?? 0);
     const buyTax = toNumberSafe(dexData.buyTax ?? dexData.buy_tax ?? 0);
     const sellTax = toNumberSafe(dexData.sellTax ?? dexData.sell_tax ?? 0);
 
@@ -119,31 +76,24 @@ async function honeypotHeuristic(dexData = {}, provider, tokenAddress) {
     details.buyTax = buyTax;
     details.sellTax = sellTax;
 
-    // thresholds from config (fallbacks)
-    const MIN_LIQUIDITY_USD = (config.ANTIRUG?.MIN_LIQUIDITY_BNB ?? 0.5) * (config.ANTIRUG?.BNB_USD_PRICE ?? 300);
-    if (liquidityUSD < MIN_LIQUIDITY_USD) flags.push("low_liquidity_usd");
+    const MIN_LIQ = (config.ANTIRUG?.MIN_LIQUIDITY_BNB ?? 0.5) * (config.ANTIRUG?.BNB_USD_PRICE ?? 300);
+    if (liquidityUSD < MIN_LIQ) flags.push("low_liquidity_usd");
     if (holders < (config.ANTIRUG?.MIN_HOLDERS ?? 20)) flags.push("low_holder_count");
     if (buyTax > (config.ANTIRUG?.HIGH_TAX_THRESHOLD_PERCENT ?? 25) || sellTax > (config.ANTIRUG?.HIGH_TAX_THRESHOLD_PERCENT ?? 25)) {
       flags.push("high_tax");
     }
 
-    // attempt to fetch bytecode (safe retry)
+    let bytecode = "";
     try {
-      let bytecode = "";
-      if (typeof web3Retry === "function") {
-        // web3Retry expects a function that returns a promise; we call provider.getCode inside it
-        bytecode = await web3Retry(() => provider.getCode(tokenAddress));
-      } else {
-        // fallback direct call
-        bytecode = await provider.getCode(tokenAddress);
-      }
-      details.bytecodeLength = (bytecode || "").length;
+      bytecode = await withRetries(() => provider.getCode(tokenAddress));
       const bcFlags = basicBytecodeFlags(bytecode);
       if (bcFlags.length) flags.push(...bcFlags);
+      details.bytecodeLength = bytecode.length;
     } catch (err) {
-      log.warn({ err: err?.message }, "bytecode fetch failed");
+      log.warn({ err: err?.message }, "Bytecode fetch failed");
       details.bytecodeError = err?.message ?? String(err);
     }
+
   } catch (e) {
     log.warn({ err: e?.message }, "honeypotHeuristic error");
   }
@@ -151,17 +101,14 @@ async function honeypotHeuristic(dexData = {}, provider, tokenAddress) {
   return { flags: Array.from(new Set(flags)), details };
 }
 
-/**
- * analyzeToken(tokenAddress, dexscreenerData)
- * Main entry point.
- */
-export async function analyzeToken(tokenAddress, dexscreenerData = {}) {
+// --- Main analyzer ---
+export async function analyzeToken(tokenAddress, dsRaw = {}) {
   const id = uid("sig_");
   const out = {
     id,
     token: tokenAddress,
-    score: 0,
-    riskLevel: "HIGH",
+    score: 100,
+    riskLevel: "LOW",
     flags: [],
     details: {},
     timestamp: Date.now()
@@ -174,141 +121,108 @@ export async function analyzeToken(tokenAddress, dexscreenerData = {}) {
 
   const provider = getProvider();
 
-  // obtain dexscreener data: try dsUtils.getPair or fallback to fetchTokenFromDexscreener
-  let dsData = dexscreenerData && Object.keys(dexscreenerData).length ? dexscreenerData : {};
-  try {
-    if (!dsData || Object.keys(dsData).length === 0) {
-      if (typeof dsUtils.getPair === "function") {
-        dsData = await dsUtils.getPair(tokenAddress);
-      } else if (typeof dsUtils.fetchTokenFromDexscreener === "function") {
-        dsData = await dsUtils.fetchTokenFromDexscreener(tokenAddress);
-      } else if (typeof dsUtils.fetch === "function") {
-        dsData = await dsUtils.fetch(tokenAddress);
-      } else {
-        // last resort: call dexscreener API directly (conservative)
-        const url = `${config.DEXSCREENER_API}${tokenAddress}`;
-        try {
-          const resp = await axios.get(url, { timeout: 8000 });
-          dsData = resp.data || {};
-        } catch (err) {
-          log.warn({ err: err?.message }, "direct dexscreener fetch failed");
-          dsData = {};
-        }
+  // --- Fetch Dexscreener data if needed ---
+  let dsData = dsRaw && Object.keys(dsRaw).length ? dsRaw : {};
+  if (!dsData || Object.keys(dsData).length === 0) {
+    try {
+      if (typeof dsUtils.getPair === "function") dsData = await dsUtils.getPair(tokenAddress);
+      else if (typeof dsUtils.fetchTokenFromDexscreener === "function") dsData = await dsUtils.fetchTokenFromDexscreener(tokenAddress);
+      else {
+        const resp = await axios.get(`${config.DEXSCREENER_API}${tokenAddress}`, { timeout: 8000 });
+        dsData = resp.data || {};
       }
+    } catch (err) {
+      log.warn({ err: err?.message, tokenAddress }, "Failed fetching Dexscreener data");
+      dsData = {};
     }
-  } catch (err) {
-    log.warn({ err: err?.message, tokenAddress }, "failed to fetch dexscreener data");
-    dsData = {};
   }
 
-  // normalize numeric fields
+  // --- Normalize numeric fields ---
   const liquidityUSD = toNumberSafe(dsData.liquidity?.usd ?? dsData.liquidity ?? 0);
-  const price = toNumberSafe(dsData.priceUsd ?? dsData.price ?? dsData.tokenPrice ?? 0);
+  const priceUSD = toNumberSafe(dsData.priceUsd ?? dsData.price ?? 0);
   const holders = toNumberSafe(dsData.holders ?? dsData.holderCount ?? 0);
-  const ageSeconds = toNumberSafe(dsData.ageSeconds ?? dsData.age ?? 0);
   const volume24h = toNumberSafe(dsData.volume?.usd ?? dsData.volume ?? 0);
-  const fdv = toNumberSafe(dsData.fdv ?? dsData.marketCap ?? dsData.market_cap ?? 0);
+  const fdv = toNumberSafe(dsData.fdv ?? dsData.marketCap ?? 0);
 
-  out.details.dex = { liquidityUSD, price, holders, ageSeconds, volume24h, fdv };
+  out.details.dex = { liquidityUSD, priceUSD, holders, volume24h, fdv };
 
-  // 1) liquidity metric (higher better). Use SNIPER.MIN_LIQUIDITY_BNB as base if present.
-  const bnbUsdPrice = config.ANTIRUG?.BNB_USD_PRICE ?? 300;
-  const minLiquidityBNB = config.SNIPER?.MIN_LIQUIDITY_BNB ?? (config.ANTIRUG?.MIN_LIQUIDITY_BNB ?? 0.5);
-  const liqThresholdUsd = minLiquidityBNB * bnbUsdPrice; // rough USD threshold
-  const liquidityMetric = Math.max(0, Math.min(1, liquidityUSD / Math.max(1, liqThresholdUsd)));
-  out.details.liquidityMetric = liquidityMetric;
-
-  // 2) dev concentration metric (0..1, higher is worse)
-  let devConcentrationMetric = 0;
+  // --- Owner concentration ---
   try {
-    if (Array.isArray(dsData.topHolders) && dsData.topHolders.length) {
-      const topShare = dsData.topHolders.slice(0, 5).reduce((s, h) => s + toNumberSafe(h.percent ?? h.share ?? 0), 0);
-      devConcentrationMetric = Math.min(1, topShare / 50); // top5 50% => high concentration
-      out.details.topHoldersTop5Percent = topShare;
-    } else if (toNumberSafe(dsData.ownerHoldPercent, 0)) {
-      devConcentrationMetric = Math.min(1, toNumberSafe(dsData.ownerHoldPercent) / 50);
-      out.details.ownerHoldPercent = dsData.ownerHoldPercent;
-    } else {
-      devConcentrationMetric = 0;
+    const tokenContract = new ethers.Contract(tokenAddress, [
+      'function totalSupply() view returns (uint256)',
+      'function balanceOf(address) view returns (uint256)',
+      'function owner() view returns (address)'
+    ], provider);
+
+    const totalSupply = await withRetries(() => tokenContract.totalSupply());
+    const ownerAddr = await withRetries(() => tokenContract.owner?.());
+    if (ownerAddr && totalSupply > 0n) {
+      const ownerBalance = await withRetries(() => tokenContract.balanceOf(ownerAddr));
+      const ownerPct = Number(ownerBalance * 100n / totalSupply);
+      out.details.ownerPct = ownerPct;
+      if (ownerPct > 50) { out.score -= 30; out.flags.push("highOwnerPct"); }
+      else if (ownerPct > 30) { out.score -= 15; out.flags.push("moderateOwnerPct"); }
     }
   } catch (e) {
-    devConcentrationMetric = 0;
+    log.debug({ err: e?.message, tokenAddress }, "Owner concentration skipped");
   }
-  out.details.devConcentrationMetric = devConcentrationMetric;
 
-  // 3) social/volume metric (volume relative to liquidity) — higher is better up to a point
-  const volumeToLiq = liquidityUSD > 0 ? Math.min(1, volume24h / Math.max(1, liquidityUSD)) : 0;
-  out.details.volumeToLiq = volumeToLiq;
-
-  // 4) honeypot & bytecode heuristics
+  // --- Honeypot & bytecode ---
   const hp = await honeypotHeuristic(dsData, provider, tokenAddress);
-  if (hp.flags && hp.flags.length) {
-    out.flags.push(...hp.flags);
-  }
+  if (hp.flags.length) out.flags.push(...hp.flags);
   out.details.honeypotDetails = hp.details ?? {};
 
-  // 5) LP lock detection (rudimentary)
+  // --- Contract suspicious functions ---
   try {
-    if (dsData.lpLocked === false || dsData.locked === false) {
-      out.flags.push("unlocked_lp");
-    } else if (dsData.lpLocked === true || dsData.locked === true) {
-      // locked -> nothing
-    } else if (dsData.liquidityLockInfo && dsData.liquidityLockInfo.locked === false) {
-      out.flags.push("unlocked_lp");
-      out.details.liquidityLockInfo = dsData.liquidityLockInfo;
-    }
-  } catch (e) {
-    // ignore
-  }
+    const bytecode = await withRetries(() => provider.getCode(tokenAddress));
+    const suspiciousPatterns = /(mint|blacklist|setFee|setTradingEnabled|withdraw|emergencyWithdraw)/i;
+    if (suspiciousPatterns.test(bytecode)) { out.score -= 20; out.flags.push("suspiciousBytecode"); }
+  } catch {}
 
-  // 6) metric vector (higher is better)
+  // --- Volume heuristics ---
+  if (volume24h > 1_000_000) out.flags.push("highVolume");
+  if (volume24h > 5_000_000) out.score -= 10;
+
+  // --- Liquidity weighting & metrics ---
+  const liqThresholdUsd = (config.SNIPER?.MIN_LIQUIDITY_BNB ?? 0.5) * (config.ANTIRUG?.BNB_USD_PRICE ?? 300);
+  const liquidityMetric = Math.min(1, liquidityUSD / Math.max(1, liqThresholdUsd));
+  out.details.liquidityMetric = liquidityMetric;
+
+  // --- Weighted scoring vector ---
   const metrics = {
     liquidity: liquidityMetric,
-    contract: 1 - devConcentrationMetric,
-    social: Math.min(1, volumeToLiq * 5), // scale to reward some activity
-    devWallets: 1 - devConcentrationMetric
+    contract: 1 - ((out.details.ownerPct ?? 0) / 100),
+    social: Math.min(1, volume24h / Math.max(1, liquidityUSD) * 5),
+    devWallets: 1 - ((out.details.ownerPct ?? 0) / 100)
   };
-
-  // 7) apply weights (from config or default)
-  const weights = config.ANTIRUG?.SCORE_WEIGHTS ?? {
-    liquidity: 0.25,
-    contract: 0.35,
-    social: 0.2,
-    devWallets: 0.2
-  };
-
+  const weights = config.ANTIRUG?.SCORE_WEIGHTS ?? { liquidity:0.25, contract:0.35, social:0.2, devWallets:0.2 };
   const score = computeWeightsScore(metrics, weights);
   out.score = score;
   out.riskLevel = riskFromScore(score);
 
-  // 8) derive flags from numeric thresholds
-  if (hp.flags.includes("low_liquidity_usd") || liquidityMetric < 0.2) out.flags.push("low_liquidity");
-  if (devConcentrationMetric > 0.6) out.flags.push("dev_concentration_high");
-  if (volumeToLiq > 3) out.flags.push("abnormal_volume_spike");
+  // --- Flags from thresholds ---
+  if (liquidityMetric < 0.2) out.flags.push("low_liquidity");
+  if ((out.details.ownerPct ?? 0) > 60) out.flags.push("dev_concentration_high");
+  if (volume24h / Math.max(1, liquidityUSD) > 3) out.flags.push("abnormal_volume_spike");
 
-  // 9) rug probability heuristic (simple)
-  const rugProbability = Math.round((1 - score / 100) * 100);
-  out.details.rugProbabilityPercent = rugProbability;
-
-  // 10) unique flags
   out.flags = Array.from(new Set(out.flags));
 
-  // 11) recommendations
+  // --- Recommendations ---
   const recommended = {};
   const defaultBuyPercent = config.SNIPER?.DEFAULT_BUY_PERCENT ?? 0.5;
   if (out.riskLevel === "LOW") {
     recommended.recommendedBuyPercent = Math.min(2, defaultBuyPercent);
-    recommended.minBuyUsd = Math.max(1, 1);
+    recommended.minBuyUsd = Math.max(1,1);
   } else if (out.riskLevel === "MEDIUM") {
-    recommended.recommendedBuyPercent = Math.max(0, defaultBuyPercent / 2);
-    recommended.minBuyUsd = Math.max(1, 2);
+    recommended.recommendedBuyPercent = Math.max(0, defaultBuyPercent/2);
+    recommended.minBuyUsd = Math.max(1,2);
   } else {
     recommended.recommendedBuyPercent = 0;
-    recommended.minBuyUsd = Math.max(1, 5);
+    recommended.minBuyUsd = Math.max(1,5);
   }
   out.details.recommended = recommended;
 
-  // 12) annotate with dexscreener summary
+  // --- Dex summary ---
   out.details.dexSummary = {
     name: dsData.name ?? dsData.token ?? dsData.symbol ?? "",
     symbol: dsData.symbol ?? dsData.tokenSymbol ?? "",
