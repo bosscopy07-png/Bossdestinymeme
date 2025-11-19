@@ -11,13 +11,13 @@ import { logInfo, logError } from "./logs.js";
 
 // Load RPC providers from environment OR fallback defaults
 const PROVIDERS = [
-  process.env.RPC_1,
-  process.env.RPC_2,
-  process.env.RPC_3,
-].filter(Boolean); // remove undefined entries
+  process.env.BSC_RPC,
+  process.env.BSC_RPC_2,
+  process.env.BSC_RPC_3,
+].filter(Boolean);
 
 if (PROVIDERS.length === 0) {
-  throw new Error("❌ No RPC providers found. Add RPC_1, RPC_2, RPC_3 to your .env file.");
+  throw new Error("❌ No RPC providers found. Add BSC_RPC, BSC_RPC_2, BSC_RPC_3 to your .env file.");
 }
 
 let providerIndex = 0;
