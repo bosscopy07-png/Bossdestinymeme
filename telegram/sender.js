@@ -11,7 +11,7 @@ import { escapeMarkdownV2 } from "../utils/format.js";
 let adminNotifier = null;
 
 // Register a notifier callback (to avoid circular imports)
-export function registerAdminNotifier(fn) {
+function registerAdminNotifier(fn) {
   adminNotifier = fn;
 }
 
@@ -41,12 +41,12 @@ function saveSeen() {
 }
 
 // Check if pair already sent
-export function isPairSent(address) {
+function isPairSent(address) {
   return seenPairs.has(address.toLowerCase());
 }
 
 // Mark pair as sent
-export function markPairAsSent(address) {
+function markPairAsSent(address) {
   const key = address.toLowerCase();
   if (!seenPairs.has(key)) {
     seenPairs.add(key);
@@ -63,7 +63,7 @@ function buildSignalMessage(signal) {
 ━━━━━━━━━━━━━━
 🏷️ *Name:* ${escapeMarkdownV2(signal.token)} (${escapeMarkdownV2(signal.symbol)})
 💠 *Address:* \`${escapeMarkdownV2(signal.address)}\`
-💵 *Price:* $${signal.price.toFixed(4)}
+💵 *Price:* $${signal.price?.toFixed(4) || "0.0000"}
 🌊 *Liquidity:* $${signal.liquidity?.usd?.toLocaleString() || "0"}
 📊 *Volume (24h):* $${signal.volume?.h24?.toLocaleString() || "0"}
 ⏱️ *Age:* ${signal.age || "Unknown"}
@@ -81,7 +81,7 @@ function buildSignalMessage(signal) {
 // ----------------------
 // SEND SIGNAL
 // ----------------------
-export async function sendTokenSignal(bot, chatId, signal) {
+async function sendTokenSignal(bot, chatId, signal) {
   try {
     if (isPairSent(signal.address)) {
       logInfo(`Signal already sent: ${signal.symbol} (${signal.address})`);
@@ -116,7 +116,7 @@ export async function sendTokenSignal(bot, chatId, signal) {
 // ----------------------
 // ADMIN NOTIFICATIONS
 // ----------------------
-export async function sendAdminNotification(bot, message) {
+async function sendAdminNotification(bot, message) {
   if (!config.ADMIN_CHAT_ID) return;
 
   try {
@@ -127,4 +127,15 @@ export async function sendAdminNotification(bot, message) {
   } catch (err) {
     logError("Failed to send admin message", err);
   }
-      }
+}
+
+// ----------------------
+// EXPORT DEFAULT OBJECT
+// ----------------------
+export default {
+  sendTokenSignal,
+  sendAdminNotification,
+  registerAdminNotifier,
+  isPairSent,
+  markPairAsSent
+};
