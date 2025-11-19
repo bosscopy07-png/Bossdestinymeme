@@ -3,6 +3,7 @@ import { Markup } from "telegraf";
 import { logInfo, logError } from "../utils/logs.js";
 import config from "../config/index.js";
 import fs from "fs";
+import path from "path";
 
 // ----------------------
 // INTERNAL STATE
@@ -17,7 +18,7 @@ export function registerAdminNotifier(fn) {
 // ----------------------
 // SEEN PAIRS FILE STORAGE
 // ----------------------
-const SEEN_FILE = "./seen_pairs.json";
+const SEEN_FILE = path.resolve("./seen_pairs.json");
 let seenPairs = new Set();
 
 // Load storage
@@ -57,7 +58,8 @@ export function markPairAsSent(address) {
 // MARKDOWN SANITIZER
 // ----------------------
 function sanitize(text = "") {
-  return text.replace(/([_\*\[\]\(\)\~\`\>\#\+\-\=\|\{\}\.\!])/g, "\\$1");
+  // Escape MarkdownV2 special characters for Telegram
+  return String(text).replace(/([_*[\]()~`>#+\-=|{}.!])/g, "\\$1");
 }
 
 // ----------------------
@@ -98,11 +100,9 @@ export async function sendTokenSignal(bot, chatId, tokenData) {
     const buttons = Markup.inlineKeyboard([
       [
         Markup.button.callback("💥 Snipe Now", `SNIPER_${address}`),
-        Markup.button.callback("👀 Watch", `WATCH_${address}`)
+        Markup.button.callback("👀 Watch", `WATCH_${address}`),
       ],
-      [
-        Markup.button.callback("ℹ Details", `DETAILS_${address}`)
-      ]
+      [Markup.button.callback("ℹ Details", `DETAILS_${address}`)],
     ]);
 
     await bot.telegram.sendMessage(chatId, message, {
@@ -112,7 +112,6 @@ export async function sendTokenSignal(bot, chatId, tokenData) {
 
     markPairAsSent(address);
     logInfo(`Signal delivered: ${tokenData.symbol} (${address})`);
-
   } catch (err) {
     logError("Failed to send token signal", err);
 
@@ -137,4 +136,4 @@ export async function sendAdminNotification(bot, message) {
   } catch (err) {
     logError("Failed to send admin message", err);
   }
-      }
+}
