@@ -1,0 +1,58 @@
+{
+  "name": "quantum-bsc-sniper",
+  "version": "1.1.0",
+  "description": "Quantum Sniper — BSC Memecoin Scanner, Telegram Bot, Anti‑Rug AI, Dexscreener Integration, Mempool Monitor, and Sniper Trading Engine.",
+  "type": "module",
+  "main": "api/server.js",
+  "scripts": {
+    "dev:scanner": "NODE_ENV=development node scanner/index.js",
+    "dev:bot": "NODE_ENV=development node telegram/bot.js",
+    "dev:api": "NODE_ENV=development node api/server.js",
+
+    "start": "pm2-runtime ecosystem.config.js",
+
+    "start:scanner": "node scanner/index.js",
+    "start:bot": "node telegram/bot.js",
+    "start:api": "node api/server.js",
+
+    "clean": "rm -rf node_modules package-lock.json",
+    "reinstall": "npm run clean && npm install"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "chalk": "^5.3.0",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.1",
+    "express": "^4.19.2",
+    "fs-extra": "^11.2.0",
+    "node-cron": "^3.0.3",
+    "pino": "^9.0.0",
+    "sqlite3": "^5.1.7",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "pm2": "^5.3.0",
+    "nodemon": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=9.0.0"
+  },
+  "keywords": [
+    "bsc",
+    "sniper-bot",
+    "memecoin",
+    "anti-rug",
+    "dexscreener",
+    "geckoterminal",
+    "sniper",
+    "trading-bot",
+    "telegram-bot",
+    "mempool",
+    "web3",
+    "ethers",
+    "quantum-sniper"
+  ],
+  "author": "Boss Destiny — Quantum Sniper Core Engineer",
+  "license": "MIT"
+}
