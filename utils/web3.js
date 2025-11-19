@@ -1,18 +1,24 @@
 /**
  * utils/web3.js
  *
- * Handles BSC Web3/Ethers connections, multi-provider fallback, and helpers.
+ * Handles BSC Web3/Ethers connections, multi-provider fallback, wallet helpers, and UID generation.
  */
 
 import { ethers } from "ethers";
+import crypto from "crypto";
 import config from "../config/index.js";
 import { logInfo, logError } from "./logs.js";
 
+// Load RPC providers from environment OR fallback defaults
 const PROVIDERS = [
-  "https://bsc-dataseed1.binance.org/",
-  "https://bsc-dataseed2.binance.org/",
-  "https://bsc-dataseed3.binance.org/",
-];
+  process.env.RPC_1,
+  process.env.RPC_2,
+  process.env.RPC_3,
+].filter(Boolean); // remove undefined entries
+
+if (PROVIDERS.length === 0) {
+  throw new Error("❌ No RPC providers found. Add RPC_1, RPC_2, RPC_3 to your .env file.");
+}
 
 let providerIndex = 0;
 let provider = new ethers.JsonRpcProvider(PROVIDERS[providerIndex]);
@@ -30,7 +36,7 @@ export function getProvider() {
 export async function switchProvider() {
   providerIndex = (providerIndex + 1) % PROVIDERS.length;
   provider = new ethers.JsonRpcProvider(PROVIDERS[providerIndex]);
-  logInfo(`Switched provider to ${PROVIDERS[providerIndex]}`);
+  logInfo(`🔁 Switched provider → ${PROVIDERS[providerIndex]}`);
   return provider;
 }
 
@@ -38,7 +44,7 @@ export async function switchProvider() {
  * Get a wallet signer from configured private key
  */
 export function getWalletSigner() {
-  if (!config.trader?.privateKey) throw new Error("Private key not set");
+  if (!config.trader?.privateKey) throw new Error("❌ Private key not set in config");
   return new ethers.Wallet(config.trader.privateKey, provider);
 }
 
@@ -58,21 +64,31 @@ export function formatBNB(wei) {
 
 /**
  * Retry helper for async calls
- * @param {function} fn - async function to execute
- * @param {number} retries - number of retries
- * @param {number} delayMs - delay between retries in ms
+ * @param {Function} fn - async function
+ * @param {number} retries - retry attempts
+ * @param {number} delayMs - delay between retries
  */
 export async function withRetries(fn, retries = 3, delayMs = 500) {
   let lastError;
+
   for (let i = 0; i < retries; i++) {
     try {
       return await fn();
     } catch (err) {
       lastError = err;
-      logError(`Attempt ${i + 1} failed: ${err.message}`);
+      logError(`⚠️ Attempt ${i + 1} failed: ${err.message}`);
       await new Promise((res) => setTimeout(res, delayMs));
-      await switchProvider(); // optional: switch provider on failure
+      await switchProvider();
     }
   }
+
   throw lastError;
+}
+
+/**
+ * Generate a unique ID (UID)
+ * Used by scanners, caches, and tracking systems
+ */
+export function uid() {
+  return crypto.randomUUID();
 }
