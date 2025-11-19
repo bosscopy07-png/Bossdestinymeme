@@ -62,4 +62,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD node -e "process.exit(require('fs').existsSync('./package.json') ? 0 : 1)"
 
 # Start the bot
-CMD ["pm2-runtime", "ecosystem.config.js"]
+CMD ["pm2-runtime", "ecosystem.config.cjs"]
