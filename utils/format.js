@@ -1,6 +1,5 @@
 /**
  * utils/format.js
- *
  * Helper functions for formatting numbers, percentages, and strings for Telegram.
  */
 
@@ -49,6 +48,9 @@ export function escapeMarkdownV2(text = "") {
     .replace(/!/g, "\\!");
 }
 
+// Alias `escape` for backward compatibility
+export const escape = escapeMarkdownV2;
+
 /**
  * Simple number formatting helper with commas
  * @param {number|string} value
@@ -68,4 +70,4 @@ export function formatUsd(amount) {
   if (num >= 1e6) return `$${(num / 1e6).toFixed(2)}M`;
   if (num >= 1e3) return `$${(num / 1e3).toFixed(2)}K`;
   return `$${num.toFixed(2)}`;
-                         }
+}
