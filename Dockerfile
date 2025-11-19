@@ -16,14 +16,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy package files
 COPY package.json package-lock.json* ./
 
-# Install dependencies (works even without lockfile)
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+# Install dependencies
+RUN npm install --legacy-peer-deps
 
 # Copy full source
 COPY . .
 
-# Build step (ignored if not needed)
-RUN npm run build || echo "No build script found"
+# Build (if needed)
+RUN npm run build || echo "No build script"
+
 
 # =====================================================================
 # STAGE 2 — RUNTIME
@@ -35,27 +36,30 @@ WORKDIR /app
 # Install PM2 globally
 RUN npm install -g pm2@5 --unsafe-perm
 
-# Add user for security
+# Create safe user
 RUN addgroup --system appgroup && adduser --system appuser --ingroup appgroup
 
-# Copy built app + node_modules
-COPY --from=builder /app /app
+# ---- FIX PM2 ERROR: Set safe PM2 HOME ----
+ENV PM2_HOME=/app/.pm2
+RUN mkdir -p /app/.pm2 && chown -R appuser:appgroup /app/.pm2
+# ------------------------------------------
+
+# Copy dependencies + app
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app ./
 
 # Logs directory
 RUN mkdir -p /app/logs && chown -R appuser:appgroup /app/logs
 
 USER appuser
 
-# Default API port
 ENV PORT=5000
 EXPOSE 5000
-
-# Timezone for accurate logging
 ENV TZ=Africa/Lagos
 
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-  CMD node -e "process.exit(require('fs').existsSync('./scanner/index.js') ? 0 : 1)"
+  CMD node -e "process.exit(require('fs').existsSync('./package.json') ? 0 : 1)"
 
-# Start bot + scanner via PM2
+# Start the bot
 CMD ["pm2-runtime", "ecosystem.config.js"]
