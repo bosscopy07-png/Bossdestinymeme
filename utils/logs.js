@@ -34,10 +34,11 @@ const log = Pino(
     Pino.destination(logPath)
 );
 
-// --- Exported Helpers ---
+// --- Exported helpers ---
 export const logInfo = (msg, meta = {}) => log.info(meta, msg);
 export const logError = (msg, meta = {}) => log.error(meta, msg);
 export const logWarn = (msg, meta = {}) => log.warn(meta, msg);
 export const logDebug = (msg, meta = {}) => log.debug(meta, msg);
 
+// Default export
 export default log;
