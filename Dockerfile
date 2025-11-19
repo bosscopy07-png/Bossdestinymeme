@@ -1,11 +1,11 @@
 # =====================================================================
-# STAGE 1 — BUILDER (installs dependencies cleanly)
+# STAGE 1 — BUILDER
 # =====================================================================
 FROM node:20-slim AS builder
 
 WORKDIR /app
 
-# Install required build tools for native modules
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     build-essential \
@@ -13,53 +13,49 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy package files first (best layer caching)
+# Copy package files
 COPY package.json package-lock.json* ./
 
-# Install all dependencies including dev (for building native modules)
-RUN npm ci
+# Install dependencies (works even without lockfile)
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
 # Copy full source
 COPY . .
 
-# Build (if you have TypeScript or build scripts)
-RUN npm run build || echo "No build step"
+# Build step (ignored if not needed)
+RUN npm run build || echo "No build script found"
 
 # =====================================================================
-# STAGE 2 — RUNTIME (lean & production-only)
+# STAGE 2 — RUNTIME
 # =====================================================================
 FROM node:20-slim AS runtime
 
 WORKDIR /app
 
-# Install pm2 at system level
+# Install PM2 globally
 RUN npm install -g pm2@5 --unsafe-perm
 
-# Create non-root user for security
+# Add user for security
 RUN addgroup --system appgroup && adduser --system appuser --ingroup appgroup
 
-# Copy node_modules from builder
-COPY --from=builder /app/node_modules ./node_modules
+# Copy built app + node_modules
+COPY --from=builder /app /app
 
-# Copy built application
-COPY --from=builder /app ./
-
-# Create logs directory
+# Logs directory
 RUN mkdir -p /app/logs && chown -R appuser:appgroup /app/logs
 
-# Switch to non-root user
 USER appuser
 
-# Expose API port
+# Default API port
 ENV PORT=5000
 EXPOSE 5000
 
-# Set timezone to avoid timestamp issues
+# Timezone for accurate logging
 ENV TZ=Africa/Lagos
 
-# HEALTHCHECK — verifies PM2 + Node environment is alive
+# Healthcheck
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-  CMD node -e "process.exit(require('fs').existsSync('./package.json') ? 0 : 1)"
+  CMD node -e "process.exit(require('fs').existsSync('./scanner/index.js') ? 0 : 1)"
 
-# Start your PM2 ecosystem
+# Start bot + scanner via PM2
 CMD ["pm2-runtime", "ecosystem.config.js"]
