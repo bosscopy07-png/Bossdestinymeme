@@ -1,7 +1,7 @@
 {
   "name": "quantum-bsc-sniper",
   "version": "1.1.0",
-  "description": "Quantum Sniper — BSC Memecoin Scanner, Telegram Bot, Anti‑Rug AI, Dexscreener Integration, Mempool Monitor, and Sniper Trading Engine.",
+  "description": "Quantum Sniper — BSC Memecoin Scanner, Telegram Bot, Anti-Rug AI, Dexscreener Integration, Mempool Monitor, and Sniper Trading Engine.",
   "type": "module",
   "main": "api/server.js",
   "scripts": {
@@ -21,14 +21,19 @@
   "dependencies": {
     "axios": "^1.7.2",
     "chalk": "^5.3.0",
+    "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "ethers": "^6.13.1",
     "express": "^4.19.2",
     "fs-extra": "^11.2.0",
     "node-cron": "^3.0.3",
+    "p-queue": "^7.4.1",
     "pino": "^9.0.0",
     "sqlite3": "^5.1.7",
-    "telegraf": "^4.16.3"
+    "telegraf": "^4.16.3",
+    "ws": "^8.17.0",
+    "node-fetch": "^3.3.2",
+    "eventemitter3": "^5.0.1"
   },
   "devDependencies": {
     "pm2": "^5.3.0",
