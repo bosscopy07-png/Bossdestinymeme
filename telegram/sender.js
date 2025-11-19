@@ -1,27 +1,27 @@
 // FILE: telegram/sender.js
 import { Markup } from "telegraf";
-import { logInfo, logError } from "../utils/logs.js";
-import config from "../config/index.js";
 import fs from "fs";
-import path from "path";
+import config from "../config/index.js";
+import { logInfo, logError } from "../utils/logs.js";
+import { escapeMarkdownV2 } from "../utils/format.js";
 
 // ----------------------
 // INTERNAL STATE
 // ----------------------
 let adminNotifier = null;
 
-// SAFELY REGISTER ADMIN NOTIFIER (prevents circular imports)
+// Register a notifier callback (to avoid circular imports)
 export function registerAdminNotifier(fn) {
   adminNotifier = fn;
 }
 
 // ----------------------
-// SEEN PAIRS FILE STORAGE
+// SEEN PAIRS STORAGE
 // ----------------------
-const SEEN_FILE = path.resolve("./seen_pairs.json");
+const SEEN_FILE = "./seen_pairs.json";
 let seenPairs = new Set();
 
-// Load storage
+// Load seen pairs
 try {
   if (fs.existsSync(SEEN_FILE)) {
     const fileData = JSON.parse(fs.readFileSync(SEEN_FILE, "utf8"));
@@ -31,7 +31,7 @@ try {
   logError("Failed to load seen pairs file", err);
 }
 
-// Save storage
+// Save seen pairs
 function saveSeen() {
   try {
     fs.writeFileSync(SEEN_FILE, JSON.stringify([...seenPairs], null, 2));
@@ -40,12 +40,12 @@ function saveSeen() {
   }
 }
 
-// Check if token already sent
+// Check if pair already sent
 export function isPairSent(address) {
   return seenPairs.has(address.toLowerCase());
 }
 
-// Mark token as sent
+// Mark pair as sent
 export function markPairAsSent(address) {
   const key = address.toLowerCase();
   if (!seenPairs.has(key)) {
@@ -55,85 +55,76 @@ export function markPairAsSent(address) {
 }
 
 // ----------------------
-// MARKDOWN SANITIZER
+// BUILD SIGNAL MESSAGE
 // ----------------------
-function sanitize(text = "") {
-  // Escape MarkdownV2 special characters for Telegram
-  return String(text).replace(/([_*[\]()~`>#+\-=|{}.!])/g, "\\$1");
+function buildSignalMessage(signal) {
+  return `
+*NEW TOKEN DETECTED – HYPER BEAST MODE*
+━━━━━━━━━━━━━━
+🏷️ *Name:* ${escapeMarkdownV2(signal.token)} (${escapeMarkdownV2(signal.symbol)})
+💠 *Address:* \`${escapeMarkdownV2(signal.address)}\`
+💵 *Price:* $${signal.price.toFixed(4)}
+🌊 *Liquidity:* $${signal.liquidity?.usd?.toLocaleString() || "0"}
+📊 *Volume (24h):* $${signal.volume?.h24?.toLocaleString() || "0"}
+⏱️ *Age:* ${signal.age || "Unknown"}
+🔗 *Chart:* [View Chart](${signal.pairUrl || "https://example.com"})
+🛡️ *Risk Level:* ${signal.riskLevel || "HIGH"}
+💯 *Signal Strength:* STRONG
+━━━━━━━━━━━━━━
+*Holders:* ${signal.holders?.toLocaleString() || "N/A"}
+*FDV:* $${signal.fdv?.toLocaleString() || "0"}
+*Owner %:* ${signal.ownerPct || "N/A"}
+*Flags:* ${signal.flags?.map(escapeMarkdownV2).join(", ") || "None"}
+`;
 }
 
 // ----------------------
-// MAIN SIGNAL BUILDER
+// SEND SIGNAL
 // ----------------------
-function buildSignalMessage(data) {
-  const {
-    symbol,
-    name,
-    address,
-    priceUsd,
-    mc,
-    liquidity,
-    buys,
-    sells,
-    pairCreatedAt,
-  } = data;
-
-  return (
-    `*${sanitize(symbol)} — ${sanitize(name)}*\n` +
-    `\`${sanitize(address)}\`\n\n` +
-    `💰 *Price:* $${sanitize(priceUsd)}\n` +
-    `📦 *Market Cap:* ${sanitize(mc)}\n` +
-    `💧 *Liquidity:* ${sanitize(liquidity)}\n` +
-    `🟢 Buys: ${sanitize(String(buys || 0))} | 🔴 Sells: ${sanitize(String(sells || 0))}\n` +
-    `⏱️ *Pair Age:* ${sanitize(pairCreatedAt || "Unknown")}\n`
-  );
-}
-
-// ----------------------
-// MAIN SENDER
-// ----------------------
-export async function sendTokenSignal(bot, chatId, tokenData) {
+export async function sendTokenSignal(bot, chatId, signal) {
   try {
-    const message = buildSignalMessage(tokenData);
-    const address = tokenData.address;
+    if (isPairSent(signal.address)) {
+      logInfo(`Signal already sent: ${signal.symbol} (${signal.address})`);
+      return;
+    }
+
+    const message = buildSignalMessage(signal);
 
     const buttons = Markup.inlineKeyboard([
       [
-        Markup.button.callback("💥 Snipe Now", `SNIPER_${address}`),
-        Markup.button.callback("👀 Watch", `WATCH_${address}`),
+        Markup.button.callback("💥 Snipe Now", `SNIPER_${signal.tokenAddress}`),
+        Markup.button.callback("👀 Watch", `WATCH_${signal.tokenAddress}`)
       ],
-      [Markup.button.callback("ℹ Details", `DETAILS_${address}`)],
+      [Markup.button.callback("ℹ Details", `DETAILS_${signal.tokenAddress}`)]
     ]);
 
     await bot.telegram.sendMessage(chatId, message, {
       parse_mode: "MarkdownV2",
-      ...buttons,
+      ...buttons
     });
 
-    markPairAsSent(address);
-    logInfo(`Signal delivered: ${tokenData.symbol} (${address})`);
+    markPairAsSent(signal.address);
+    logInfo(`Signal delivered: ${signal.symbol} (${signal.address})`);
   } catch (err) {
     logError("Failed to send token signal", err);
-
     if (adminNotifier) {
-      adminNotifier(`❗ *Signal Error*\n${sanitize(err.message)}`);
+      adminNotifier(`❗ *Signal Error*\n${escapeMarkdownV2(err.message)}`);
     }
   }
 }
 
 // ----------------------
-// ADMIN NOTIFICATION
+// ADMIN NOTIFICATIONS
 // ----------------------
 export async function sendAdminNotification(bot, message) {
   if (!config.ADMIN_CHAT_ID) return;
 
   try {
-    await bot.telegram.sendMessage(config.ADMIN_CHAT_ID, sanitize(message), {
-      parse_mode: "MarkdownV2",
+    await bot.telegram.sendMessage(config.ADMIN_CHAT_ID, escapeMarkdownV2(message), {
+      parse_mode: "MarkdownV2"
     });
-
     logInfo("Admin notification sent");
   } catch (err) {
     logError("Failed to send admin message", err);
   }
-  }
+      }
