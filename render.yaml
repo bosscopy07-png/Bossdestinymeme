@@ -1,0 +1,84 @@
+# FILE: render.yaml
+# Full Render.com configuration for:
+#  - Express API (public)
+#  - Scanner Worker (background)
+#  - Telegram Bot Worker (background)
+#
+# Follows Render best-practices:
+#  - Separate build/start commands
+#  - Dedicated workers (scanner & bot)
+#  - Automatic deploys
+#  - Persistent logs
+#  - Health checks for uptime verification
+
+services:
+  # ======================================================
+  # PUBLIC API SERVICE
+  # ======================================================
+  - type: web
+    name: quantum-sniper-api
+    env: node
+    plan: starter
+    region: oregon
+
+    buildCommand: |
+      npm ci --include=dev
+
+    startCommand: |
+      node api/server.js
+
+    # Keeps hot redeploys stable
+    autoDeploy: true
+
+    # Healthcheck endpoint improves Render uptime
+    healthCheckPath: /health
+    healthCheckTimeout: 500
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+
+  # ======================================================
+  # BACKGROUND WORKER — SCANNER ENGINE
+  # ======================================================
+  - type: worker
+    name: quantum-sniper-scanner
+    env: node
+    plan: starter
+    region: oregon
+
+    buildCommand: |
+      npm ci
+
+    startCommand: |
+      node scanner/index.js
+
+    autoDeploy: true
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SCANNER_INTERVAL
+        value: "1500"
+
+  # ======================================================
+  # BACKGROUND WORKER — TELEGRAM BOT
+  # ======================================================
+  - type: worker
+    name: quantum-sniper-bot
+    env: node
+    plan: starter
+    region: oregon
+
+    buildCommand: |
+      npm ci
+
+    startCommand: |
+      node telegram/bot.js
+
+    autoDeploy: true
+
+    envVars:
+      - key: NODE_ENV
+        value: production
