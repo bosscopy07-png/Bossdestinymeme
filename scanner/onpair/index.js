@@ -2,15 +2,7 @@
  * FILE: scanner/onpair/index.js
  *
  * PancakeSwap V2 PairCreated listener (ESM edition).
- * Auto-detects newly created LP pairs and emits structured events.
- *
- * Features:
- * - ESM-native
- * - Provider failover + reconnection safety
- * - Stable disk persistence (seen_pairs.json)
- * - EventEmitter interface (on / once)
- * - Duplicate filtering (in-memory + disk)
- * - Token extraction logic (non-WBNB token detection)
+ * Stable, clean and fully self-contained.
  */
 
 import fs from 'fs/promises';
@@ -26,11 +18,13 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// ---------------------------------------------
+// FIX: Stable and guaranteed path for seen file
+// ---------------------------------------------
+const SEEN_PAIRS_FILE = path.resolve(process.cwd(), 'seen_pairs.json');
+
 const log = Pino({ level: config.LOG_LEVEL || 'info' });
 const EMIT = new EventEmitter();
-
-// Resolve seen pairs file path safely
-const SEEN_PAIRS_FILE = path.resolve(__dirname, '../../../', config.PERSISTENCE.SEEN_PAIRS_FILE || './seen_pairs.json');
 
 const FACTORY_ADDRESS = config.FACTORY_ADDRESS;
 const POLL_RECONNECT_MS = 15_000;
@@ -40,7 +34,6 @@ const FACTORY_ABI = [
   "event PairCreated(address indexed token0, address indexed token1, address pair, uint)"
 ];
 
-// Memory cache to prevent double processing
 let seenPairs = new Set();
 let listening = false;
 let factoryContract = null;
@@ -48,7 +41,7 @@ let factoryContract = null;
 /** Load previously seen LP pairs */
 async function loadSeenPairs() {
   try {
-    const exists = await fs.stat(SEEN_PAIRS_FILE).then(() => true).catch(() => false);
+    let exists = await fs.stat(SEEN_PAIRS_FILE).then(() => true).catch(() => false);
 
     if (!exists) {
       await fs.writeFile(SEEN_PAIRS_FILE, JSON.stringify({ pairs: [] }, null, 2));
@@ -60,9 +53,9 @@ async function loadSeenPairs() {
     const parsed = JSON.parse(raw || '{}');
     seenPairs = new Set(parsed.pairs || []);
 
-    log.info({ count: seenPairs.size }, 'Loaded seen pairs from file');
+    log.info({ count: seenPairs.size }, 'Loaded seen pairs');
   } catch (err) {
-    log.warn({ err: err?.message }, 'Failed to load seen pairs, starting empty');
+    log.warn({ err: err?.message }, 'Failed to load seen pairs — starting empty');
     seenPairs = new Set();
   }
 }
@@ -96,7 +89,6 @@ async function handlePairCreated(token0, token1, pairAddress, event) {
     const a1 = (token1 || '').toLowerCase();
     const pairKey = pairAddress.toLowerCase();
 
-    // Determine real token (avoid WBNB)
     const tokenAddress =
       WBNB.includes(a0) && !WBNB.includes(a1) ? a1 :
       WBNB.includes(a1) && !WBNB.includes(a0) ? a0 :
@@ -120,14 +112,15 @@ async function handlePairCreated(token0, token1, pairAddress, event) {
       timestamp: Date.now(),
     };
 
-    log.info({ payload }, 'New pair detected — emitting');
+    log.info({ payload }, 'New LP detected');
     EMIT.emit('newPair', payload);
+
   } catch (err) {
     log.error({ err: err?.message }, 'handlePairCreated error');
   }
 }
 
-/** Start listening to PancakeSwap PairCreated events */
+/** Start listener */
 export async function startListening() {
   if (listening) return EMIT;
   listening = true;
@@ -142,13 +135,14 @@ export async function startListening() {
       try {
         await handlePairCreated(token0, token1, pairAddress, event);
       } catch (err) {
-        log.error({ err: err?.message }, 'PairCreated handler error');
+        log.error({ err: err?.message }, 'PairCreated handler crashed');
       }
     });
 
-    log.info({ factory: FACTORY_ADDRESS }, 'Listening to PancakeSwap PairCreated events');
+    log.info({ factory: FACTORY_ADDRESS }, 'Listening for PancakeSwap pairs…');
+
   } catch (err) {
-    log.error({ err: err?.message }, 'Failed to attach listener — retrying');
+    log.error({ err: err?.message }, 'Listener attach failed — retrying');
     listening = false;
     setTimeout(() => startListening(), POLL_RECONNECT_MS);
   }
@@ -156,7 +150,7 @@ export async function startListening() {
   return EMIT;
 }
 
-/** Stop listener gracefully */
+/** Stop listener */
 export async function stopListening() {
   try {
     if (factoryContract?.removeAllListeners) {
@@ -165,7 +159,7 @@ export async function stopListening() {
     listening = false;
     log.info('Stopped PairCreated listener');
   } catch (err) {
-    log.warn({ err: err?.message }, 'Failed to stop listener cleanly');
+    log.warn({ err: err?.message }, 'Stop listener failed');
   }
 }
 
