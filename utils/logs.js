@@ -5,10 +5,10 @@ import path from "path";
 
 const isDev = process.env.NODE_ENV !== "production";
 
-// Determine logs directory
+// Logs directory
 const LOG_DIR = process.env.LOG_DIRECTORY || path.join(process.cwd(), "logs");
 
-// Ensure logs folder exists
+// Ensure directory exists
 if (!fs.existsSync(LOG_DIR)) {
     fs.mkdirSync(LOG_DIR, { recursive: true });
 }
@@ -16,8 +16,8 @@ if (!fs.existsSync(LOG_DIR)) {
 // Log file path
 const logPath = path.join(LOG_DIR, "app.log");
 
-// Pino logger
-const log = Pino(
+// Create Pino logger
+const logger = Pino(
     {
         level: process.env.LOG_LEVEL || "info",
         timestamp: () => `,"time":"${new Date().toISOString()}"`,
@@ -29,16 +29,19 @@ const log = Pino(
                       translateTime: true,
                   },
               }
-            : undefined, // Production uses plain JSON logs
+            : undefined,
     },
     Pino.destination(logPath)
 );
 
-// --- Exported helpers ---
-export const logInfo = (msg, meta = {}) => log.info(meta, msg);
-export const logError = (msg, meta = {}) => log.error(meta, msg);
-export const logWarn = (msg, meta = {}) => log.warn(meta, msg);
-export const logDebug = (msg, meta = {}) => log.debug(meta, msg);
+// ----- Exported helper wrappers -----
+export const logInfo = (msg, meta = {}) => logger.info(meta, msg);
+export const logError = (msg, meta = {}) => logger.error(meta, msg);
+export const logWarn = (msg, meta = {}) => logger.warn(meta, msg);
+export const logDebug = (msg, meta = {}) => logger.debug(meta, msg);
 
-// Default export
-export default log;
+// Provide named export `log` + default export
+export const log = logger;
+
+// Default export for convenience
+export default logger;
