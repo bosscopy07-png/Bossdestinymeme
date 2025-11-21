@@ -116,7 +116,7 @@ async function sendTokenSignal(bot, chatId, signal) {
 // ----------------------
 // ADMIN NOTIFICATIONS
 // ----------------------
-async function sendAdminNotification(bot, message) {
+export async function sendAdminNotification(bot, message) {
   if (!config.ADMIN_CHAT_ID) return;
 
   try {
