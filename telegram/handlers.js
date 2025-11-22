@@ -1,3 +1,4 @@
+
 // FILE: telegram/handlers.js
 import ui from './ui.js';
 import sender from './sender.js';
@@ -13,40 +14,44 @@ class TelegramHandlers {
   }
 
   init() {
-    this.bot.onText(/\/start/, (msg) => this.start(msg));
-    this.bot.on('callback_query', (query) => this.callback(query));
-    this.bot.on('text', (msg) => this.textHandler(msg));
+    // ----------------------------
+    // /start command
+    // ----------------------------
+    this.bot.start((ctx) => this.start(ctx));
 
-    // Load admin commands inside the same file
+    // ----------------------------
+    // Text messages
+    // ----------------------------
+    this.bot.on('text', (ctx) => this.textHandler(ctx));
+
+    // ----------------------------
+    // Callback query
+    // ----------------------------
+    this.bot.on('callback_query', (ctx) => this.callback(ctx));
+
+    // ----------------------------
+    // Admin commands
+    // ----------------------------
     this.handleAdminCommands(this.bot);
 
     logInfo('Telegram Handlers: READY');
   }
 
-  // ================================
-  //        /START COMMAND
-  // ================================
-  async start(msg = {}) {
-    const chatId = msg?.chat?.id;
-    if (!chatId) return;
-
+  async start(ctx) {
     try {
-      await sender.send(chatId, {
+      await sender.send(ctx.chat.id, {
         text: ui.startMessage(),
         options: ui.startKeyboard(),
       });
-      logInfo(`User Started Bot: ${chatId}`);
+      logInfo(`User Started Bot: ${ctx.chat.id}`);
     } catch (e) {
       logError(`Start Handler Error: ${e?.message}`, e);
     }
   }
 
-  // ================================
-  //      CALLBACK HANDLER
-  // ================================
-  async callback(query = {}) {
-    const chatId = query?.message?.chat?.id;
-    const data = query?.data;
+  async callback(ctx) {
+    const chatId = ctx.chat?.id || ctx.update?.callback_query?.message?.chat?.id;
+    const data = ctx.update?.callback_query?.data;
     if (!chatId || !data) return;
 
     try {
@@ -66,22 +71,17 @@ class TelegramHandlers {
     } catch (e) {
       logError('Callback Handler Error', e);
     } finally {
-      try { this.bot.answerCallbackQuery(query.id); } catch {}
+      try { await ctx.answerCbQuery(); } catch {}
     }
   }
 
-  // ================================
-  //       TEXT HANDLER
-  // ================================
-  async textHandler(msg = {}) {
-    const chatId = msg?.chat?.id;
-    const text = msg?.text?.trim();
+  async textHandler(ctx) {
+    const chatId = ctx.chat?.id;
+    const text = ctx.message?.text?.trim();
     if (!chatId || !text) return;
 
-    // Ignore slash commands
     if (text.startsWith('/')) return;
 
-    // Watchlist fast shortcut
     if (text.startsWith('$')) {
       const symbol = text.slice(1).trim();
       return this.handleWatch(chatId, symbol);
@@ -92,9 +92,6 @@ class TelegramHandlers {
     });
   }
 
-  // ================================
-  //        BUY HANDLER
-  // ================================
   async handleBuy(chatId, pair) {
     try {
       await sender.send(chatId, {
@@ -115,9 +112,6 @@ class TelegramHandlers {
     }
   }
 
-  // ================================
-  //       WATCH HANDLER
-  // ================================
   async handleWatch(chatId, symbol) {
     try {
       await sender.send(chatId, {
@@ -129,9 +123,6 @@ class TelegramHandlers {
     }
   }
 
-  // ================================
-  //       DETAILS HANDLER
-  // ================================
   async handleDetails(chatId, pair) {
     try {
       await sender.send(chatId, {
@@ -145,9 +136,6 @@ class TelegramHandlers {
     }
   }
 
-  // ================================
-  //      OPEN SNIPER MENU
-  // ================================
   async openSniper(chatId) {
     try {
       await sender.send(chatId, {
@@ -159,9 +147,6 @@ class TelegramHandlers {
     }
   }
 
-  // ================================
-  //     PRESET LOADER HANDLER
-  // ================================
   async sniperPreset(chatId, presetId) {
     try {
       const preset = presets[presetId];
@@ -177,36 +162,27 @@ class TelegramHandlers {
     }
   }
 
-  // ================================
-  //      ADMIN COMMANDS
-  // ================================
   handleAdminCommands(bot) {
-    // /admin command
     bot.command('admin', async (ctx) => {
-      try {
-        const userId = String(ctx.from.id);
-        if (!config.ADMIN_CHAT_ID || userId !== String(config.ADMIN_CHAT_ID)) {
-          return ctx.reply('⛔ You are not authorized to access admin controls.');
-        }
-
-        logInfo(`Admin menu opened by ${userId}`);
-
-        const keyboard = Markup.inlineKeyboard([
-          [
-            Markup.button.callback('📢 Broadcast', 'ADMIN_BROADCAST'),
-            Markup.button.callback('📊 Stats', 'ADMIN_STATS'),
-          ],
-          [
-            Markup.button.callback('🔄 Restart Bot', 'ADMIN_RESTART'),
-            Markup.button.callback('👥 User List', 'ADMIN_USERS'),
-          ],
-        ]);
-
-        await ctx.reply('🛠 **Admin Panel**\nSelect an option:', { parse_mode: 'Markdown', ...keyboard });
-      } catch (err) {
-        logError('Admin Panel Error', err);
-        return ctx.reply('❌ Error opening admin panel.');
+      const userId = String(ctx.from.id);
+      if (!config.ADMIN_CHAT_ID || userId !== String(config.ADMIN_CHAT_ID)) {
+        return ctx.reply('⛔ You are not authorized to access admin controls.');
       }
+
+      logInfo(`Admin menu opened by ${userId}`);
+
+      const keyboard = Markup.inlineKeyboard([
+        [
+          Markup.button.callback('📢 Broadcast', 'ADMIN_BROADCAST'),
+          Markup.button.callback('📊 Stats', 'ADMIN_STATS'),
+        ],
+        [
+          Markup.button.callback('🔄 Restart Bot', 'ADMIN_RESTART'),
+          Markup.button.callback('👥 User List', 'ADMIN_USERS'),
+        ],
+      ]);
+
+      await ctx.reply('🛠 **Admin Panel**\nSelect an option:', { parse_mode: 'Markdown', ...keyboard });
     });
 
     // Admin actions
