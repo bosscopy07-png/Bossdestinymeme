@@ -1,3 +1,6 @@
+import dotenv from 'dotenv';
+dotenv.config(); // Load environment variables for PM2
+
 export default {
   apps: [
     {
