@@ -25,7 +25,6 @@ COPY . .
 # Build (if needed)
 RUN npm run build || echo "No build script"
 
-
 # =====================================================================
 # STAGE 2 — RUNTIME
 # =====================================================================
@@ -33,16 +32,8 @@ FROM node:20-slim AS runtime
 
 WORKDIR /app
 
-# Install PM2 globally
-RUN npm install -g pm2@5 --unsafe-perm
-
 # Create safe user
 RUN addgroup --system appgroup && adduser --system appuser --ingroup appgroup
-
-# ---- FIX PM2 ERROR: Set safe PM2 HOME ----
-ENV PM2_HOME=/app/.pm2
-RUN mkdir -p /app/.pm2 && chown -R appuser:appgroup /app/.pm2
-# ------------------------------------------
 
 # Copy dependencies + app
 COPY --from=builder /app/node_modules ./node_modules
@@ -61,5 +52,5 @@ ENV TZ=Africa/Lagos
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD node -e "process.exit(require('fs').existsSync('./package.json') ? 0 : 1)"
 
-# Start the bot
-CMD ["pm2-runtime", "ecosystem.config.cjs"]
+# Start the bot directly with Node.js
+CMD ["node", "telegram/bot.js"]
