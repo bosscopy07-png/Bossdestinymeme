@@ -1,20 +1,17 @@
-/**
- * Enterprise PM2 Ecosystem Configuration (CommonJS Version)
- */
+// ecosystem.config.cjs
+const dotenv = require('dotenv');
+dotenv.config(); // Load .env automatically
 
 module.exports = {
   apps: [
-    // ================================================================
-    // API SERVER (Express)
-    // ================================================================
     {
       name: "quantum-api",
       script: "api/server.js",
       instances: 1,
       exec_mode: "fork",
       env: {
+        ...process.env, // Pass all env variables
         NODE_ENV: "production",
-        PORT: process.env.PORT || 5000,
       },
       watch: false,
       autorestart: true,
@@ -24,18 +21,14 @@ module.exports = {
       time: true,
       log_date_format: "YYYY-MM-DD HH:mm:ss Z",
     },
-
-    // ================================================================
-    // TOKEN SCANNER ENGINE
-    // ================================================================
     {
       name: "quantum-scanner",
       script: "scanner/index.js",
       instances: 1,
       exec_mode: "fork",
       env: {
+        ...process.env,
         NODE_ENV: "production",
-        SCANNER_INTERVAL: process.env.SCANNER_INTERVAL || 1500,
       },
       watch: false,
       autorestart: true,
@@ -45,18 +38,14 @@ module.exports = {
       time: true,
       log_date_format: "YYYY-MM-DD HH:mm:ss Z",
     },
-
-    // ================================================================
-    // TELEGRAM BOT
-    // ================================================================
     {
       name: "quantum-bot",
       script: "telegram/bot.js",
       instances: 1,
       exec_mode: "fork",
       env: {
+        ...process.env, // Pass all env variables including TELEGRAM_BOT_TOKEN
         NODE_ENV: "production",
-        TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
       },
       watch: false,
       autorestart: true,
