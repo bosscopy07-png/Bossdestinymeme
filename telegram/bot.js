@@ -8,11 +8,11 @@ import { sendAdminNotification } from "./sender.js";
 // ----------------------------
 // BOT INITIALIZATION
 // ----------------------------
-if (!config.TELEGRAM_BOT_TOKEN) {
+if (!config.BOT_TOKEN) {
   throw new Error("❌ TELEGRAM_BOT_TOKEN is missing in config");
 }
 
-const bot = new Telegraf(config.TELEGRAM_BOT_TOKEN, {
+const bot = new Telegraf(config.BOT_TOKEN, {
   handlerTimeout: 60_000,
   telegram: { apiRoot: "https://api.telegram.org" },
 });
@@ -20,8 +20,7 @@ const bot = new Telegraf(config.TELEGRAM_BOT_TOKEN, {
 // ----------------------------
 // INIT HANDLERS
 // ----------------------------
-const handlers = new TelegramHandlers(bot);
-handlers.init();
+new TelegramHandlers(bot).init();
 
 // ----------------------------
 // GLOBAL ERROR HANDLER
@@ -42,31 +41,20 @@ bot.catch(async (err, ctx) => {
 // BOT LAUNCH FUNCTION
 // ----------------------------
 export async function startTelegramBot() {
-  try {
-    await bot.launch();
-    logInfo("🚀 Telegram bot launched successfully");
+  await bot.launch();
+  logInfo("🚀 Telegram bot launched successfully");
 
-    // Notify admin that bot is online
-    if (config.ADMIN_CHAT_ID) {
-      await sendAdminNotification(bot, "🤖 Bot Started Successfully");
-    }
-
-    // Graceful shutdown handlers
-    process.once("SIGINT", () => {
-      bot.stop("SIGINT");
-      logInfo("Bot stopped via SIGINT");
-    });
-
-    process.once("SIGTERM", () => {
-      bot.stop("SIGTERM");
-      logInfo("Bot stopped via SIGTERM");
-    });
-
-  } catch (err) {
-    logError("❌ Failed to launch bot", err);
-    process.exit(1);
+  // Notify admin
+  if (config.ADMIN_CHAT_ID) {
+    await sendAdminNotification(bot, "🤖 Bot Started Successfully");
   }
+
+  // Graceful shutdown
+  process.once("SIGINT", () => { bot.stop("SIGINT"); logInfo("Bot stopped via SIGINT"); });
+  process.once("SIGTERM", () => { bot.stop("SIGTERM"); logInfo("Bot stopped via SIGTERM"); });
 }
 
-// Export bot instance
+// ----------------------------
+// EXPORT BOT INSTANCE
+// ----------------------------
 export default bot;
