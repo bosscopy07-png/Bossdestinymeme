@@ -52,5 +52,5 @@ ENV TZ=Africa/Lagos
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD node -e "process.exit(require('fs').existsSync('./package.json') ? 0 : 1)"
 
-# Start the bot directly with Node.js
-CMD ["node", "telegram/bot.js"]
+# Start the app without PM2
+CMD ["node", "api/server.js"]
