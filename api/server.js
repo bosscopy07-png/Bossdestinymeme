@@ -7,24 +7,31 @@ import routes from "./routes.js";
 import config from "../config/index.js";
 import { logInfo, logError } from "../utils/logs.js";
 
-// --------------------------------------------
+// Optional: Auto-start Telegram bot here
+// import { startTelegramBot } from "../telegram/bot.js";
+
+// --------------------------------------------------
 // CREATE APP INSTANCE
-// --------------------------------------------
+// --------------------------------------------------
 const app = express();
 
-// --------------------------------------------
-// CORE SECURITY MIDDLEWARES
-// --------------------------------------------
+// --------------------------------------------------
+// SECURITY MIDDLEWARE
+// --------------------------------------------------
 app.use(
   helmet({
     xssFilter: true,
     noSniff: true,
     hidePoweredBy: true,
-    frameguard: { action: "deny" }
+    frameguard: { action: "deny" },
+    crossOriginResourcePolicy: false,
+    crossOriginEmbedderPolicy: false
   })
 );
 
-// Allow only essential origins unless user overrides
+// --------------------------------------------------
+// CORS CONFIG (SAFE DEFAULT, OVERRIDDEN BY ENV)
+// --------------------------------------------------
 app.use(
   cors({
     origin: config.API?.CORS_ORIGIN || "*",
@@ -33,25 +40,39 @@ app.use(
   })
 );
 
-// Prevent malformed JSON from crashing server
-app.use(express.json({ limit: "1mb", strict: true }));
+// --------------------------------------------------
+// JSON PARSER (FAIL-SAFE)
+// --------------------------------------------------
+app.use(
+  express.json({
+    limit: "2mb",
+    strict: false,
+    verify: (req, res, buf) => {
+      try {
+        JSON.parse(buf.toString());
+      } catch (_) {
+        throw new Error("INVALID_JSON_PAYLOAD");
+      }
+    }
+  })
+);
 
-// --------------------------------------------
-// SMART RATE LIMITING (ANTI-BOT / ANTI-DDOS)
-// --------------------------------------------
+// --------------------------------------------------
+// RATE LIMITING (ANTI-BOT / ANTI-DDOS)
+// --------------------------------------------------
 app.use(
   rateLimit({
-    windowMs: 10 * 1000,     // 10s high-frequency window
-    max: 120,                // max requests per window
+    windowMs: 10 * 1000, // 10 seconds
+    max: 120,
     message: { error: "too_many_requests" },
     standardHeaders: true,
     legacyHeaders: false
   })
 );
 
-// --------------------------------------------
-// OPTIONAL: REQUEST LOGGER (DEV MODE)
-// --------------------------------------------
+// --------------------------------------------------
+// REQUEST LOGGER (ONLY DEV MODE)
+// --------------------------------------------------
 if (config.NODE_ENV === "development") {
   app.use((req, res, next) => {
     logInfo(`HTTP ${req.method} ${req.originalUrl}`);
@@ -59,14 +80,14 @@ if (config.NODE_ENV === "development") {
   });
 }
 
-// --------------------------------------------
-// MOUNT MAIN ROUTES
-// --------------------------------------------
+// --------------------------------------------------
+// MAIN ROUTES
+// --------------------------------------------------
 app.use("/api", routes);
 
-// --------------------------------------------
-// HEALTHCHECK ENDPOINT
-// --------------------------------------------
+// --------------------------------------------------
+// HEALTHCHECK (SELF-HEAL READY)
+// --------------------------------------------------
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
@@ -76,11 +97,11 @@ app.get("/health", (req, res) => {
   });
 });
 
-// --------------------------------------------
+// --------------------------------------------------
 // GLOBAL ERROR HANDLER
-// --------------------------------------------
+// --------------------------------------------------
 app.use((err, req, res, next) => {
-  logError("API Error → " + (err?.stack || err?.message || err));
+  logError("API ERROR → " + (err?.stack || err?.message || err));
 
   res.status(err?.status || 500).json({
     error: "internal_error",
@@ -88,44 +109,48 @@ app.use((err, req, res, next) => {
   });
 });
 
-// --------------------------------------------
+// --------------------------------------------------
 // SERVER BOOT FUNCTION
-// --------------------------------------------
-export function startServer(
-  port = config?.API?.PORT || config?.api?.port || 5000
+// --------------------------------------------------
+export async function startServer(
+  port = config.API?.PORT || config.api?.PORT || 5000
 ) {
   const normalizedPort = Number(port);
 
   try {
+    // ------------------------------------------
+    // OPTIONAL: startup tasks (DB, cache, bot)
+    // ------------------------------------------
+    // await startTelegramBot();
+
     const server = app.listen(normalizedPort, () => {
-      logInfo(`🌐 API server running on port ${normalizedPort}`);
+      logInfo(`🚀 API server running on port ${normalizedPort}`);
     });
 
     // Graceful shutdown
-    process.on("SIGINT", () => {
-      logInfo("Shutting down server (SIGINT)");
-      server.close(() => process.exit(0));
-    });
+    const shutdown = (signal) => {
+      logInfo(`⚠ Received ${signal}. Shutting down...`);
+      server.close(() => {
+        logInfo("Server closed. Exiting now.");
+        process.exit(0);
+      });
+    };
 
-    process.on("SIGTERM", () => {
-      logInfo("Shutting down server (SIGTERM)");
-      server.close(() => process.exit(0));
-    });
+    ["SIGINT", "SIGTERM"].forEach((sig) =>
+      process.on(sig, () => shutdown(sig))
+    );
 
     return app;
   } catch (err) {
-    logError("❌ Failed to start API server", err);
+    logError("❌ Failed to start server:", err);
     process.exit(1);
   }
 }
 
-// --------------------------------------------
-// AUTO-START IF RUN DIRECTLY
-// --------------------------------------------
-if (
-  process.argv[1]?.endsWith("/api/server.js") ||
-  import.meta.url.endsWith("/api/server.js")
-) {
+// --------------------------------------------------
+// AUTO-START WHEN RUN DIRECTLY
+// --------------------------------------------------
+if (import.meta.url.endsWith("/api/server.js")) {
   startServer();
 }
 
