@@ -5,8 +5,8 @@ import path from "path";
 import pino from "pino";
 import { fileURLToPath } from "url";
 
-import { analyzeToken } from "./analyzeToken.js";
-import { pushSignal } from "./signalSender.js";
+import { analyzeToken } from './analyzeToken.js';
+import { pushSignal } from './signalSender.js';
 
 // Fix __dirname for ESM
 const __filename = fileURLToPath(import.meta.url);
