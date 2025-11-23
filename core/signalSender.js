@@ -1,5 +1,5 @@
 // FILE: core/signalSender.js
-import { bot } from '../telegram/bot.js';
+import bot from '../telegram/bot.js';
 import pino from 'pino';
 
 const logger = pino({
