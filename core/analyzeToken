@@ -1,17 +1,11 @@
-// FILE: core/analyzeToken.js
-const pino = require('pino');
+import pino from 'pino';
 
 const logger = pino({
   name: 'TokenAnalyzer',
   level: process.env.LOG_LEVEL || 'info',
 });
 
-/**
- * Analyze a token pair to see if it meets liquidity, volume, and age thresholds
- * @param {Object} pair - The token pair object from scanner
- * @returns {Object|boolean} Returns token info object if valid, otherwise false
- */
-async function analyzeToken(pair) {
+export async function analyzeToken(pair) {
   try {
     if (!pair || !pair.baseToken) {
       logger.warn('Invalid pair object', { pair });
@@ -23,22 +17,11 @@ async function analyzeToken(pair) {
     const createdAt = pair.pairCreatedAt || Date.now();
     const ageMins = (Date.now() - createdAt) / 60000;
 
-    // Apply thresholds
-    if (liq < 25000) {
-      logger.info(`Liquidity too low: $${liq}`);
-      return false;
-    }
-    if (vol < 10000) {
-      logger.info(`Volume too low: $${vol}`);
-      return false;
-    }
-    if (ageMins > 120) {
-      logger.info(`Token too old: ${Math.floor(ageMins)} minutes`);
-      return false;
-    }
+    if (liq < 25000) return false;
+    if (vol < 10000) return false;
+    if (ageMins > 120) return false;
 
-    // Build token signal object
-    const tokenData = {
+    return {
       token: pair.baseToken.name,
       symbol: pair.baseToken.symbol,
       address: pair.baseToken.address,
@@ -48,14 +31,8 @@ async function analyzeToken(pair) {
       age: `${Math.floor(ageMins)}m`,
       url: pair.url || ''
     };
-
-    logger.info(`Token passed analysis: ${tokenData.token} (${tokenData.symbol})`);
-    return tokenData;
-
   } catch (e) {
     logger.error({ e }, 'Error analyzing token pair');
     return false;
   }
 }
-
-module.exports = { analyzeToken };
