@@ -59,7 +59,6 @@ export async function scanNewTokens() {
       if (!lastSeen.has(address)) {
         lastSeen.add(address);
         const signal = await analyzeToken(pair);
-
         if (signal) {
           await pushSignal(signal);
         }
@@ -68,14 +67,15 @@ export async function scanNewTokens() {
 
     saveSeenPairs();
   } catch (err) {
-  if (err.response?.status === 429) {
-    logger.warn("Rate limited by Dexscreener, retrying in 30s...");
-    setTimeout(scanNewTokens, 30_000); // wait 30 seconds before retry
-  } else {
-    logger.error({ err }, "Scanner API request failed, will retry...");
-    setTimeout(scanNewTokens, 5000 + Math.random() * 5000); // retry after 5–10s
+    if (err.response?.status === 429) {
+      logger.warn("Rate limited by Dexscreener, retrying in 30s...");
+      setTimeout(scanNewTokens, 30_000);
+    } else {
+      logger.error({ err }, "Scanner API request failed, will retry...");
+      setTimeout(scanNewTokens, 5000 + Math.random() * 5000);
+    }
   }
 }
 
-// Auto-scan every 15 seconds instead of 3
-setInterval(scanNewTokens, 15_000);
+// Auto-scan every 3 seconds
+setInterval(scanNewTokens, 3000); // <--- make sure this line is **outside** the function
