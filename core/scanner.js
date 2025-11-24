@@ -47,8 +47,7 @@ function saveSeenPairs() {
  * Scan new tokens from Dexscreener API
  */
 export async function scanNewTokens() {
-  const url = "https://api.dexscreener.com/tokens/v1/bsc";
-
+  const url = 'https://api.dexscreener.com/latest/dex/search?q=bsc';
   try {
     const res = await axios.get(url, { timeout: 5000 });
     const pairs = res.data.pairs || [];
