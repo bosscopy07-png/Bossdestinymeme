@@ -8,9 +8,10 @@ import { sendAdminNotification } from "./sender.js";
 // ----------------------------
 // BOT INITIALIZATION
 // ----------------------------
-if (!config.BOT_TOKEN) {
+if (!config.TELEGRAM_BOT_TOKEN) {
   throw new Error("❌ TELEGRAM_BOT_TOKEN is missing in config");
 }
+
 
 const bot = new Telegraf(config.BOT_TOKEN, {
   handlerTimeout: 60_000,
