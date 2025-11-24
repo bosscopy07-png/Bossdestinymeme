@@ -73,5 +73,5 @@ export async function scanNewTokens() {
   }
 }
 
-// Auto-scan every 3 seconds
-setInterval(scanNewTokens, 3000);
+// Auto-scan every 15 seconds instead of 3
+setInterval(scanNewTokens, 15_000);
