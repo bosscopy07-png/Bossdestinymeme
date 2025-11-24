@@ -1,6 +1,7 @@
 // FILE: config/index.js
 import dotenv from 'dotenv';
 import fs from 'fs';
+import config from '../config/index.js';
 dotenv.config();
 
 // ─────────────────────────────────────────────
