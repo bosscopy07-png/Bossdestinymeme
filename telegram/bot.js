@@ -13,7 +13,7 @@ if (!config.TELEGRAM_BOT_TOKEN) {
 }
 
 
-const bot = new Telegraf(config.BOT_TOKEN, {
+const bot = new Telegraf(config.TELEGRAM_BOT_TOKEN, {
   handlerTimeout: 60_000,
   telegram: { apiRoot: "https://api.telegram.org" },
 });
