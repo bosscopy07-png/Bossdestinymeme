@@ -17,7 +17,7 @@ const log = Pino({ level: config.LOG_LEVEL || 'info' });
 
 const TTL = config.DEXSCREENER_TTL_SEC || 30; // seconds
 const cache = new NodeCache({ stdTTL: TTL, checkperiod: 10 });
-const BASE_URL = 'https://api.dexscreener.com/tokens/v1/bsc/';
+const BASE_URL = 'https://api.dexscreener.com/latest/dex/search?q=bsc';
 
 /**
  * normalizeDexResponse
