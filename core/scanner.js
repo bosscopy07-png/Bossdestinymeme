@@ -68,8 +68,12 @@ export async function scanNewTokens() {
 
     saveSeenPairs();
   } catch (err) {
+  if (err.response?.status === 429) {
+    logger.warn("Rate limited by Dexscreener, retrying in 30s...");
+    setTimeout(scanNewTokens, 30_000); // wait 30 seconds before retry
+  } else {
     logger.error({ err }, "Scanner API request failed, will retry...");
-    setTimeout(scanNewTokens, 3000 + Math.random() * 2000);
+    setTimeout(scanNewTokens, 5000 + Math.random() * 5000); // retry after 5–10s
   }
 }
 
