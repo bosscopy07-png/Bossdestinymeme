@@ -17,7 +17,7 @@ const logger = pino({
   level: process.env.LOG_LEVEL || "info",
 });
 
-const SEEN_FILE = path.join(__dirname, "../seen_pairs.json");
+const SEEN_FILE = process.env.SEEN_PAIRS_FILE || "/tmp/seen_pairs.json";
 
 // Load last seen pairs
 let lastSeen = new Set();
