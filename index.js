@@ -3,9 +3,9 @@ import dotenv from "dotenv";
 dotenv.config();
 
 import { scanNewTokens } from "./core/scanner.js";
-import bot from "./telegram/bot.js";        // Make sure this path is correct
+import { startTelegramBot } from "./telegram/bot.js";
 import pino from "pino";
-import express from "express";              // <== Added
+import express from "express";
 
 const logger = pino({
   name: "App",
@@ -14,8 +14,8 @@ const logger = pino({
 
 (async () => {
   try {
-    // Start Telegram bot
-    await bot.launch();
+    // Start Telegram bot PROPERLY
+    await startTelegramBot();
     logger.info("⚡ Telegram Bot Running...");
 
     // Start scanner
@@ -28,7 +28,7 @@ const logger = pino({
 })();
 
 // -------------------------
-// 👇 Render Port Binding Fix
+// Render Port Binding Fix
 // -------------------------
 
 const app = express();
