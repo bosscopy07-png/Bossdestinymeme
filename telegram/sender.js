@@ -92,10 +92,10 @@ async function sendTokenSignal(bot, chatId, signal) {
 
     const buttons = Markup.inlineKeyboard([
       [
-        Markup.button.callback("💥 Snipe Now", `SNIPER_${signal.tokenAddress}`),
-        Markup.button.callback("👀 Watch", `WATCH_${signal.tokenAddress}`)
+        Markup.button.callback("💥 Snipe Now", `BUY_${signal.address}`),
+        Markup.button.callback("👀 Watch", `WATCH_${signal.address}`)
       ],
-      [Markup.button.callback("ℹ Details", `DETAILS_${signal.tokenAddress}`)]
+      [Markup.button.callback("ℹ Details", `DETAILS_${signal.address}`)]
     ]);
 
     await bot.telegram.sendMessage(chatId, message, {
@@ -120,9 +120,11 @@ export async function sendAdminNotification(bot, message) {
   if (!config.ADMIN_CHAT_ID) return;
 
   try {
-    await bot.telegram.sendMessage(config.ADMIN_CHAT_ID, escapeMarkdownV2(message), {
-      parse_mode: "MarkdownV2"
-    });
+    await bot.telegram.sendMessage(
+      config.ADMIN_CHAT_ID,
+      escapeMarkdownV2(message),
+      { parse_mode: "MarkdownV2" }
+    );
     logInfo("Admin notification sent");
   } catch (err) {
     logError("Failed to send admin message", err);
