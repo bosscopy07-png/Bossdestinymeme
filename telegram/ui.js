@@ -4,38 +4,30 @@ import { escape } from "../utils/format.js";
 
 const UI = {
 
-  /* ============================
-      MARKDOWN ESCAPER
-  ============================ */
   md(text = "") {
     try { return escape(String(text)); }
     catch { return "InvalidText"; }
   },
 
-  /* ============================
-      START MESSAGE (escaped)
-  ============================ */
   startMessage() {
+    // All special MarkdownV2 characters escaped: \- \. \( \)
     const msg = `
 🤖 *Welcome to Elite On\\-Chain Scanner Bot*
 
-Your AI\\-powered BSC memecoin detector, sniper engine, and automated trading assistant
+Your AI\\-powered BSC memecoin detector, sniper engine, and automated trading assistant\\.
 
 ⚡ *Features:*
-• Real\\-time new pair detection
-• Gecko Terminal trending scanner
-• Mempool early detection & AI Anti\\-Rug
-• Auto\\-Snipe / Auto\\-Sell \\(Live or Paper\\)
-• Admin dashboard & full scanner controls
+• Real\\-time new pair detection\\.
+• Gecko Terminal trending scanner\\.
+• Mempool early detection & AI Anti\\-Rug\\.
+• Auto\\-Snipe / Auto\\-Sell \\(Live or Paper\\)\\.
+• Admin dashboard & full scanner controls\\.
 
 Tap a button below to get started 👇
     `;
     return msg;
   },
 
-  /* ============================
-      START KEYBOARD
-  ============================ */
   startKeyboard() {
     return Markup.inlineKeyboard([
       [ Markup.button.callback("📊 Dashboard", "ADMIN_DASHBOARD") ],
@@ -49,6 +41,10 @@ Tap a button below to get started 👇
     ]);
   },
 
+  // ...rest of UI functions
+};
+
+export default UI;
   /* ============================
       TOKEN SIGNAL BLOCK
   ============================ */
