@@ -41,9 +41,6 @@ Tap a button below to get started 👇
     ]);
   },
 
-  // ...rest of UI functions
-};
-
 export default UI;
   /* ============================
       TOKEN SIGNAL BLOCK
