@@ -1,3 +1,4 @@
+
 // FILE: telegram/bot.js
 import { Telegraf } from "telegraf";
 import config from "../config/index.js";
@@ -19,19 +20,36 @@ const bot = new Telegraf(config.TELEGRAM_BOT_TOKEN, {
 });
 
 // ----------------------------
+// Normalize allowed users
+// ----------------------------
+let allowedUsers = [];
+if (config.ALLOWED_USERS) {
+  if (typeof config.ALLOWED_USERS === "string") {
+    allowedUsers = config.ALLOWED_USERS.split(",").map(u => u.trim());
+  } else if (Array.isArray(config.ALLOWED_USERS)) {
+    allowedUsers = config.ALLOWED_USERS;
+  } else {
+    allowedUsers = [String(config.ALLOWED_USERS)];
+  }
+}
+
+// ----------------------------
 // /START COMMAND
 // ----------------------------
 bot.start(async (ctx) => {
   try {
-    const chatId = ctx.chat.id;
+    const chatId = String(ctx.chat.id);
 
-    // Allow only configured users (optional admin restriction)
-    if (config.ALLOWED_USERS && !config.ALLOWED_USERS.split(",").includes(String(chatId))) {
+    // Check authorization
+    if (allowedUsers.length > 0 && !allowedUsers.includes(chatId)) {
       return ctx.reply("❌ You are not authorized to use this bot.");
     }
 
-    // Send welcome message
-    await ctx.replyWithMarkdownV2(UI.startMessage(), UI.startKeyboard());
+    // Send welcome message + inline menu
+    await ctx.replyWithMarkdownV2(
+      UI.startMessage(),
+      UI.startKeyboard()
+    );
 
     logInfo(`User ${ctx.from.username || ctx.from.id} started the bot`);
   } catch (err) {
@@ -43,17 +61,16 @@ bot.start(async (ctx) => {
 });
 
 // ----------------------------
-// Inline button handler (global callback queries)
+// Inline button handler (callback queries)
 // ----------------------------
 bot.on("callback_query", async (ctx) => {
   try {
     const data = ctx.callbackQuery.data;
-    const chatId = ctx.chat.id;
 
-    // Pass to handlers
+    // Pass to TelegramHandlers
     new TelegramHandlers(bot).handleCallback(ctx);
 
-    // Always answer callback to remove "loading" state
+    // Always answer callback to remove loading state
     await ctx.answerCbQuery();
   } catch (err) {
     logError("Error handling callback_query", err);
@@ -80,7 +97,7 @@ bot.catch(async (err, ctx) => {
 // ----------------------------
 export async function startTelegramBot() {
   try {
-    // Attach all custom handlers BEFORE launching bot
+    // Attach custom handlers
     new TelegramHandlers(bot).init();
 
     // Launch bot
