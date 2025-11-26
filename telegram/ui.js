@@ -19,7 +19,7 @@ const UI = {
     const msg = `
 🤖 *Welcome to Elite On\\-Chain Scanner Bot*
 
-Your AI\\-powered BSC memecoin detector, sniper engine, and automated trading assistant."
+Your AI\\-powered BSC memecoin detector, sniper engine, and automated trading assistant
 
 ⚡ *Features:*
 • Real\\-time new pair detection
