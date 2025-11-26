@@ -1,6 +1,4 @@
 // FILE: telegram/ui.js
-// Elite Telegram UI module (ESM) — optimized for high-speed memecoin bots
-
 import { Markup } from "telegraf";
 import { escape } from "../utils/format.js";
 
@@ -15,20 +13,24 @@ const UI = {
   },
 
   /* ============================
-      START MESSAGE
+      START MESSAGE (escaped)
   ============================ */
   startMessage() {
-    return (
-      `🤖 *Welcome to Elite On-Chain Scanner Bot*\n\n` +
-      `Your AI-powered BSC memecoin detector, sniper engine, and automated trading assistant.\n\n` +
-      `⚡ *Features:* \n` +
-      `• Real-time new pair detection\n` +
-      `• Gecko Terminal trending scanner\n` +
-      `• Mempool early detection & AI Anti-Rug\n` +
-      `• Auto-Snipe / Auto-Sell (Live or Paper)\n` +
-      `• Admin dashboard & full scanner controls\n\n` +
-      `Tap a button below to get started 👇`
-    );
+    const msg = `
+🤖 *Welcome to Elite On\\-Chain Scanner Bot*
+
+Your AI\\-powered BSC memecoin detector, sniper engine, and automated trading assistant.
+
+⚡ *Features:*
+• Real\\-time new pair detection
+• Gecko Terminal trending scanner
+• Mempool early detection & AI Anti\\-Rug
+• Auto\\-Snipe / Auto\\-Sell \\(Live or Paper\\)
+• Admin dashboard & full scanner controls
+
+Tap a button below to get started 👇
+    `;
+    return msg;
   },
 
   /* ============================
