@@ -10,7 +10,6 @@ import { escapeMarkdownV2 } from "../utils/format.js";
 // ----------------------
 let adminNotifier = null;
 
-// Register a notifier callback (to avoid circular imports)
 function registerAdminNotifier(fn) {
   adminNotifier = fn;
 }
@@ -21,7 +20,6 @@ function registerAdminNotifier(fn) {
 const SEEN_FILE = "./seen_pairs.json";
 let seenPairs = new Set();
 
-// Load seen pairs
 try {
   if (fs.existsSync(SEEN_FILE)) {
     const fileData = JSON.parse(fs.readFileSync(SEEN_FILE, "utf8"));
@@ -31,7 +29,6 @@ try {
   logError("Failed to load seen pairs file", err);
 }
 
-// Save seen pairs
 function saveSeen() {
   try {
     fs.writeFileSync(SEEN_FILE, JSON.stringify([...seenPairs], null, 2));
@@ -40,17 +37,32 @@ function saveSeen() {
   }
 }
 
-// Check if pair already sent
 function isPairSent(address) {
   return seenPairs.has(address.toLowerCase());
 }
 
-// Mark pair as sent
 function markPairAsSent(address) {
   const key = address.toLowerCase();
   if (!seenPairs.has(key)) {
     seenPairs.add(key);
     saveSeen();
+  }
+}
+
+// ----------------------
+// UNIVERSAL SENDER
+// ----------------------
+async function send(chatId, payload = {}) {
+  try {
+    const text = payload.text || "";
+    const options = payload.options || {};
+
+    return await global.bot.telegram.sendMessage(chatId, escapeMarkdownV2(text), {
+      parse_mode: "MarkdownV2",
+      ...options
+    });
+  } catch (err) {
+    logError("Sender.send() failed", err);
   }
 }
 
@@ -67,7 +79,7 @@ function buildSignalMessage(signal) {
 🌊 *Liquidity:* $${signal.liquidity?.usd?.toLocaleString() || "0"}
 📊 *Volume (24h):* $${signal.volume?.h24?.toLocaleString() || "0"}
 ⏱️ *Age:* ${signal.age || "Unknown"}
-🔗 *Chart:* [View Chart](${signal.pairUrl || "https://example.com"})
+🔗 *Chart:* [View Chart](${signal.pairUrl || "https://dexscreener.com"})
 🛡️ *Risk Level:* ${signal.riskLevel || "HIGH"}
 💯 *Signal Strength:* STRONG
 ━━━━━━━━━━━━━━
@@ -114,7 +126,7 @@ async function sendTokenSignal(bot, chatId, signal) {
 }
 
 // ----------------------
-// ADMIN NOTIFICATIONS
+// ADMIN NOTIFICATION
 // ----------------------
 export async function sendAdminNotification(bot, message) {
   if (!config.ADMIN_CHAT_ID) return;
@@ -132,9 +144,10 @@ export async function sendAdminNotification(bot, message) {
 }
 
 // ----------------------
-// EXPORT DEFAULT OBJECT
+// EXPORTS
 // ----------------------
 export default {
+  send,
   sendTokenSignal,
   sendAdminNotification,
   registerAdminNotifier,
