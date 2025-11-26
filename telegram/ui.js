@@ -1,24 +1,55 @@
-// telegram/ui.js
-// Production‑ready Telegram UI module with enhanced safety and flexibility (ESM)
+// FILE: telegram/ui.js
+// Elite Telegram UI module (ESM) — optimized for high-speed memecoin bots
 
+import { Markup } from "telegraf";
 import { escape } from "../utils/format.js";
 
-export const UI = {
-  /**
-   * Escape MarkdownV2 sensitive content safely
-   */
+const UI = {
+
+  /* ============================
+      MARKDOWN ESCAPER
+  ============================ */
   md(text = "") {
-    try {
-      return escape(String(text));
-    } catch (e) {
-      console.warn("UI.md failed to escape text:", e?.message);
-      return "InvalidText";
-    }
+    try { return escape(String(text)); }
+    catch { return "InvalidText"; }
   },
 
-  /**
-   * Build token info block for signal messages
-   */
+  /* ============================
+      START MESSAGE
+  ============================ */
+  startMessage() {
+    return (
+      `🤖 *Welcome to Elite On-Chain Scanner Bot*\n\n` +
+      `Your AI-powered BSC memecoin detector, sniper engine, and automated trading assistant.\n\n` +
+      `⚡ *Features:* \n` +
+      `• Real-time new pair detection\n` +
+      `• Gecko Terminal trending scanner\n` +
+      `• Mempool early detection & AI Anti-Rug\n` +
+      `• Auto-Snipe / Auto-Sell (Live or Paper)\n` +
+      `• Admin dashboard & full scanner controls\n\n` +
+      `Tap a button below to get started 👇`
+    );
+  },
+
+  /* ============================
+      START KEYBOARD
+  ============================ */
+  startKeyboard() {
+    return Markup.inlineKeyboard([
+      [ Markup.button.callback("📊 Dashboard", "ADMIN_DASHBOARD") ],
+      [
+        Markup.button.callback("🟢 Start Scanner", "START_SCANNER"),
+        Markup.button.callback("🔴 Stop Scanner", "STOP_SCANNER")
+      ],
+      [ Markup.button.callback("💹 Trading Mode", "TRADING_MENU") ],
+      [ Markup.button.callback("⚙️ Settings", "SETTINGS_MENU") ],
+      [ Markup.button.callback("📨 Logs", "VIEW_LOGS") ]
+    ]);
+  },
+
+  /* ============================
+      TOKEN SIGNAL BLOCK
+  ============================ */
   tokenBlock(token = {}) {
     const name = this.md(token.name || "Unknown");
     const address = this.md(token.address || "N/A");
@@ -40,18 +71,15 @@ export const UI = {
     ].join("\n");
   },
 
-  /**
-   * Risk color emoji helper
-   */
   riskColor(score = 0) {
     if (score < 30) return "🟢";
     if (score < 60) return "🟡";
     return "🔴";
   },
 
-  /**
-   * Inline buttons for a new token signal
-   */
+  /* ============================
+      SIGNAL BUTTONS
+  ============================ */
   signalButtons(token = {}) {
     const address = token.address || "";
     return {
@@ -66,31 +94,31 @@ export const UI = {
     };
   },
 
-  /**
-   * Build user settings menu
-   */
-  settingsMenu(profile = {}) {
-    return {
-      parse_mode: "MarkdownV2",
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: `Gas: ${profile.maxGas ?? "N/A"}`, callback_data: "edit_gas" },
-            { text: `Slip: ${profile.maxSlippage ?? "N/A"}%`, callback_data: "edit_slip" }
-          ],
-          [{ text: `Spend: ${profile.spendLimit ?? "0"} BNB`, callback_data: "edit_spend" }],
-          [{ text: `Mode: ${profile.mode ?? "paper"}`, callback_data: "edit_mode" }],
-          [{ text: profile.sniperEnabled ? "🟢 Sniper ON" : "🔴 Sniper OFF", callback_data: "toggle_sniper" }],
-          [{ text: "📜 Watchlist", callback_data: "open_watchlist" }],
-          [{ text: "⬅ Back", callback_data: "home" }]
-        ]
-      }
-    };
+  /* ============================
+      TRADING MENU
+  ============================ */
+  tradingMenu() {
+    return Markup.inlineKeyboard([
+      [ Markup.button.callback("🟢 Enable Live Mode", "ENABLE_LIVE") ],
+      [ Markup.button.callback("🧪 Enable Paper Mode", "ENABLE_PAPER") ],
+      [ Markup.button.callback("⬅️ Back", "ADMIN_DASHBOARD") ]
+    ]);
   },
 
-  /**
-   * Home menu
-   */
+  /* ============================
+      SETTINGS MENU
+  ============================ */
+  settingsMenu() {
+    return Markup.inlineKeyboard([
+      [ Markup.button.callback("🔁 Refresh RPCs", "REFRESH_RPCS") ],
+      [ Markup.button.callback("🛡 Anti-Rug Settings", "ANTI_RUG_SETTINGS") ],
+      [ Markup.button.callback("⬅️ Back", "ADMIN_DASHBOARD") ]
+    ]);
+  },
+
+  /* ============================
+      HOME / DASHBOARD MENU
+  ============================ */
   homeMenu() {
     return {
       reply_markup: {
@@ -106,9 +134,9 @@ export const UI = {
     };
   },
 
-  /**
-   * Build PnL list message text
-   */
+  /* ============================
+      PNL BLOCK
+  ============================ */
   pnlBlock(pnl = {}) {
     const total = Number(pnl.total ?? 0).toFixed(4);
     const wins = pnl.wins ?? 0;
@@ -120,19 +148,16 @@ export const UI = {
       `*Wins:* ${this.md(wins)}`,
       `*Losses:* ${this.md(losses)}`,
       ``,
-      `*Recent Trades:*`
-    ]
-      .concat(
-        recent.map(
-          (t) => `• ${this.md(t.token)} — ${this.md(Number(t.profit ?? 0).toFixed(4))} BNB (${t.success ? "🟢" : "🔴"})`
-        )
+      `*Recent Trades:*`,
+      ...recent.map(t => 
+        `• ${this.md(t.token)} — ${this.md(Number(t.profit ?? 0).toFixed(4))} BNB (${t.success ? "🟢" : "🔴"})`
       )
-      .join("\n");
+    ].join("\n");
   },
 
-  /**
-   * Generic confirmation buttons
-   */
+  /* ============================
+      CONFIRM BUTTONS
+  ============================ */
   confirmButtons(text = "Confirm", cancelText = "Cancel") {
     return {
       reply_markup: {
@@ -143,6 +168,7 @@ export const UI = {
       }
     };
   }
+
 };
 
 export default UI;
