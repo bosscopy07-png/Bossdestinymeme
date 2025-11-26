@@ -3,6 +3,7 @@ import { Telegraf } from "telegraf";
 import config from "../config/index.js";
 import { logInfo, logError } from "../utils/logs.js";
 import TelegramHandlers from "./handlers.js";
+import UI from "./ui.js";
 import { sendAdminNotification } from "./sender.js";
 
 // ----------------------------
@@ -18,31 +19,75 @@ const bot = new Telegraf(config.TELEGRAM_BOT_TOKEN, {
 });
 
 // ----------------------------
+// /START COMMAND
+// ----------------------------
+bot.start(async (ctx) => {
+  try {
+    const chatId = ctx.chat.id;
+
+    // Allow only configured users (optional admin restriction)
+    if (config.ALLOWED_USERS && !config.ALLOWED_USERS.split(",").includes(String(chatId))) {
+      return ctx.reply("❌ You are not authorized to use this bot.");
+    }
+
+    // Send welcome message
+    await ctx.replyWithMarkdownV2(UI.startMessage(), UI.startKeyboard());
+
+    logInfo(`User ${ctx.from.username || ctx.from.id} started the bot`);
+  } catch (err) {
+    logError("Error in /start command", err);
+    if (config.ADMIN_CHAT_ID) {
+      await sendAdminNotification(bot, `❗ /start command error: ${err.message}`);
+    }
+  }
+});
+
+// ----------------------------
+// Inline button handler (global callback queries)
+// ----------------------------
+bot.on("callback_query", async (ctx) => {
+  try {
+    const data = ctx.callbackQuery.data;
+    const chatId = ctx.chat.id;
+
+    // Pass to handlers
+    new TelegramHandlers(bot).handleCallback(ctx);
+
+    // Always answer callback to remove "loading" state
+    await ctx.answerCbQuery();
+  } catch (err) {
+    logError("Error handling callback_query", err);
+  }
+});
+
+// ----------------------------
+// Global error handler
+// ----------------------------
+bot.catch(async (err, ctx) => {
+  logError("Telegram bot error", err);
+
+  try {
+    await ctx.reply("⚠️ An unexpected bot error occurred.\nAdmin has been notified.");
+  } catch (_) {}
+
+  if (config.ADMIN_CHAT_ID) {
+    await sendAdminNotification(bot, `❗ Bot Error\n${err.message}`);
+  }
+});
+
+// ----------------------------
 // BOT LAUNCH FUNCTION
 // ----------------------------
 export async function startTelegramBot() {
   try {
-    // Attach all handlers BEFORE launching bot
+    // Attach all custom handlers BEFORE launching bot
     new TelegramHandlers(bot).init();
-
-    // Global error handler
-    bot.catch(async (err, ctx) => {
-      logError("Telegram bot error", err);
-
-      try {
-        await ctx.reply("⚠️ An unexpected bot error occurred.\nAdmin has been notified.");
-      } catch (_) {}
-
-      if (config.ADMIN_CHAT_ID) {
-        await sendAdminNotification(bot, `❗ Bot Error\n${err.message}`);
-      }
-    });
 
     // Launch bot
     await bot.launch();
     logInfo("🚀 Telegram bot launched successfully");
 
-    // Notify admin on start
+    // Notify admin
     if (config.ADMIN_CHAT_ID) {
       await sendAdminNotification(bot, "🤖 Bot Started Successfully");
     }
