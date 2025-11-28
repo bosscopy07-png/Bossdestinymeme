@@ -1,3 +1,4 @@
+
 // FILE: telegram/handlers.js
 import ui from './ui.js';
 import sender from './sender.js';
@@ -15,7 +16,10 @@ class TelegramHandlers {
   init() {
     this.bot.start((ctx) => this.start(ctx));
     this.bot.on('text', (ctx) => this.textHandler(ctx));
-    this.bot.on('callback_query', (ctx) => this.callback(ctx));
+
+    // ❌ REMOVED: duplicate callback handler
+    // this.bot.on('callback_query', (ctx) => this.callback(ctx));
+
     this.handleAdminCommands(this.bot);
 
     logInfo("Telegram Handlers: READY");
@@ -42,7 +46,8 @@ class TelegramHandlers {
     }
   }
 
-  async callback(ctx) {
+  // ✔ Renamed to match bot.js
+  async handleCallback(ctx) {
     const chatId = ctx.chat?.id;
     const data = ctx.update?.callback_query?.data;
     if (!chatId || !data) return;
