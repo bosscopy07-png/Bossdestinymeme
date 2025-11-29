@@ -6,7 +6,9 @@ import TelegramHandlers from "./handlers.js";
 import UI from "./ui.js";
 import { sendAdminNotification } from "./sender.js";
 
-// Prefer explicit TELEGRAM_BOT_TOKEN but fall back to other names/env
+// --------------------------------------
+// LOAD TOKEN SAFELY
+// --------------------------------------
 const TELEGRAM_TOKEN =
   config.TELEGRAM_BOT_TOKEN ||
   config.BOT_TOKEN ||
@@ -14,110 +16,94 @@ const TELEGRAM_TOKEN =
   process.env.BOT_TOKEN;
 
 if (!TELEGRAM_TOKEN) {
-  throw new Error("❌ TELEGRAM_BOT_TOKEN is missing in config or env");
+  throw new Error("❌ TELEGRAM_BOT_TOKEN missing");
 }
 
-// Create bot instance
+// --------------------------------------
+// CREATE BOT
+// --------------------------------------
 const bot = new Telegraf(TELEGRAM_TOKEN, {
-  handlerTimeout: 60_000,
-  telegram: { apiRoot: "https://api.telegram.org" },
+  handlerTimeout: 60_000
 });
 
-// Instantiate handlers once and register them
+// --------------------------------------
+// REGISTER HANDLERS (ONLY ONCE!)
+// --------------------------------------
 const handlers = new TelegramHandlers(bot);
 handlers.init();
 
-// Optional: keep a simple /start fallback in case UI or handlers change
-// (handlers.init already registers /start; this is safe and idempotent)
+// --------------------------------------
+// FIXED /start COMMAND (NO DUPLICATE)
+// --------------------------------------
 bot.start(async (ctx) => {
   try {
-    // UI.startMessage() is expected to return MarkdownV2-safe text
-    await ctx.replyWithMarkdownV2(UI.startMessage(), UI.startKeyboard());
-    logInfo(`User ${ctx.from?.username || ctx.from?.id} used /start`);
+    await ctx.replyWithMarkdownV2(UI.startMessage(), {
+      reply_markup: UI.startKeyboard().reply_markup
+    });
+
+    logInfo(`User started bot: ${ctx.chat.id}`);
   } catch (err) {
-    logError("Error in /start fallback", err);
-    try {
-      if (config.ADMIN_CHAT_ID) {
-        await sendAdminNotification(bot, `❗ /start fallback error: ${err.message}`);
-      }
-    } catch (e) {
-      logError("Failed to notify admin about /start fallback error", e);
+    logError("Start command error", err);
+    if (config.ADMIN_CHAT_ID) {
+      await sendAdminNotification(bot, `❗ /start error: ${err.message}`);
     }
   }
 });
 
-// NOTE: TelegramHandlers.init() already registers callback_query, text, etc.
-// But keep a global safety wrapper that forwards unknown callback queries to the instance
+// --------------------------------------
+// SINGLE CALLBACK HANDLER
+// --------------------------------------
 bot.on("callback_query", async (ctx) => {
   try {
-    // prefer calling the class method that handles callbacks (named `callback` in your handlers)
-    if (typeof handlers.callback === "function") {
-      await handlers.callback(ctx);
-    } else if (typeof handlers.handleCallback === "function") {
-      await handlers.handleCallback(ctx);
-    } else {
-      // last-resort: answer the query so the user doesn't see a spinner forever
-      await ctx.answerCbQuery("Unhandled callback");
-      logInfo("Callback received but no handler method found");
-    }
+    // forward to the unified handler
+    await handlers.handleCallback(ctx);
   } catch (err) {
-    logError("Error handling callback_query (global wrapper)", err);
-    try { await ctx.answerCbQuery("Error processing action"); } catch {}
+    logError("Callback error", err);
   }
+
+  try { await ctx.answerCbQuery(); } catch {}
 });
 
-// Global error catcher (Telegraf)
+// --------------------------------------
+// GLOBAL ERROR HANDLER
+// --------------------------------------
 bot.catch(async (err, ctx) => {
-  logError("Telegram bot error", err);
+  logError("Bot Error", err);
+
   try {
-    if (ctx && ctx.reply) {
-      await ctx.reply("⚠️ An unexpected bot error occurred. Admin has been notified.");
-    }
-  } catch (_) {}
+    await ctx.reply("⚠️ Unexpected bot error. Admin notified.");
+  } catch {}
 
   try {
     if (config.ADMIN_CHAT_ID) {
-      await sendAdminNotification(bot, `❗ Bot Error\n${err?.message || String(err)}`);
+      await sendAdminNotification(bot, `❗ Bot Error\n${err.message}`);
     }
-  } catch (e) {
-    logError("Failed to send admin notification from bot.catch", e);
-  }
+  } catch {}
 });
 
-// Exposed start function — call this from your index/startup
+// --------------------------------------
+// LAUNCH FUNCTION
+// --------------------------------------
 export async function startTelegramBot() {
   try {
-    // Bot should already have handlers registered above, but ensure launched once
     await bot.launch();
-    logInfo("🚀 Telegram bot launched successfully");
+    logInfo("🚀 Bot launched");
 
     if (config.ADMIN_CHAT_ID) {
-      try {
-        await sendAdminNotification(bot, "🤖 Bot Started Successfully");
-      } catch (e) {
-        logError("Failed to send startup admin notification", e);
-      }
+      await sendAdminNotification(bot, "🤖 Bot started successfully");
     }
 
-    // Graceful shutdown
-    process.once("SIGINT", () => {
-      bot.stop("SIGINT");
-      logInfo("Bot stopped via SIGINT");
-    });
-    process.once("SIGTERM", () => {
-      bot.stop("SIGTERM");
-      logInfo("Bot stopped via SIGTERM");
-    });
+    // graceful shutdown
+    process.once("SIGINT", () => bot.stop("SIGINT"));
+    process.once("SIGTERM", () => bot.stop("SIGTERM"));
+
   } catch (err) {
-    logError("❌ Failed to start Telegram Bot", err);
-    try {
-      if (config.ADMIN_CHAT_ID) {
-        await sendAdminNotification(bot, `❗ Failed to start bot: ${err?.message || err}`);
-      }
-    } catch (_) {}
-    throw err;
+    logError("❌ Failed to start bot", err);
+
+    if (config.ADMIN_CHAT_ID) {
+      await sendAdminNotification(bot, `❗ Startup Error: ${err.message}`);
+    }
   }
 }
 
-// Default export: bot instance (useful for other modules)
 export default bot;
