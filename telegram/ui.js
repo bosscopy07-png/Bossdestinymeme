@@ -9,23 +9,24 @@ const UI = {
     catch { return "InvalidText"; }
   },
 
+  /* ============================
+        START MESSAGE
+  ============================ */
   startMessage() {
-    // All special MarkdownV2 characters escaped: \- \. \( \)
-    const msg = `
+    return `
 🤖 *Welcome to Elite On\\-Chain Scanner Bot*
 
-Your AI\\-powered BSC memecoin detector, sniper engine, and automated trading assistant\\.
+Your AI\\-powered BSC memecoin detector, sniper engine, and auto\\-trade assistant\\.
 
 ⚡ *Features:*
 • Real\\-time new pair detection\\.
-• Gecko Terminal trending scanner\\.
+• GeckoTerminal trending scanner\\.
 • Mempool early detection & AI Anti\\-Rug\\.
 • Auto\\-Snipe / Auto\\-Sell \\(Live or Paper\\)\\.
-• Admin dashboard & full scanner controls\\.
+• Developer check & Contract audit tools\\.
 
-Tap a button below to get started 👇
+Tap a button below to begin 👇
     `;
-    return msg;
   },
 
   startKeyboard() {
@@ -72,24 +73,29 @@ Tap a button below to get started 👇
   },
 
   /* ============================
-      SIGNAL BUTTONS
+      SIGNAL BUTTONS (IMPROVED)
   ============================ */
   signalButtons(token = {}) {
     const address = token.address || "";
+
     return {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "🚀 Snipe Now", callback_data: `snipe_${address}` }],
-          [{ text: "👁 Watch", callback_data: `watch_${address}` }],
-          [{ text: "❌ Ignore", callback_data: `ignore_${address}` }],
-          [{ text: "📊 Chart", url: `https://dexscreener.com/bsc/${address}` }]
+          [{ text: "🚀 Snipe Now", callback_data: `SNIPE_${address}` }],
+          [{ text: "💰 Take Profit", callback_data: `TAKEPROFIT_${address}` }],
+          [{ text: "🧨 Stop Loss", callback_data: `STOPLOSS_${address}` }],
+          [{ text: "🟡 Risk Analysis", callback_data: `RISK_${address}` }],
+          [{ text: "👁 Watch", callback_data: `WATCH_${address}` }],
+          [{ text: "❌ Ignore", callback_data: `IGNORE_${address}` }],
+          [{ text: "📈 Chart", url: `https://dexscreener.com/bsc/${address}` }],
+          [{ text: "🔁 Refresh", callback_data: `REFRESH_${address}` }]
         ]
       }
     };
   },
 
   /* ============================
-      TRADING MENU
+        TRADING MENU
   ============================ */
   tradingMenu() {
     return Markup.inlineKeyboard([
@@ -100,36 +106,38 @@ Tap a button below to get started 👇
   },
 
   /* ============================
-      SETTINGS MENU
+        SETTINGS MENU
   ============================ */
   settingsMenu() {
     return Markup.inlineKeyboard([
       [ Markup.button.callback("🔁 Refresh RPCs", "REFRESH_RPCS") ],
       [ Markup.button.callback("🛡 Anti-Rug Settings", "ANTI_RUG_SETTINGS") ],
+      [ Markup.button.callback("📡 Developer Check", "DEV_CHECK_MENU") ],
+      [ Markup.button.callback("🧮 Contract Analyzer", "CONTRACT_ANALYZER") ],
       [ Markup.button.callback("⬅️ Back", "ADMIN_DASHBOARD") ]
     ]);
   },
 
   /* ============================
-      HOME / DASHBOARD MENU
+        DASHBOARD MENU (FIXED)
   ============================ */
   homeMenu() {
     return {
       reply_markup: {
         inline_keyboard: [
           [
-            { text: "⚙ Settings", callback_data: "settings" },
-            { text: "📡 Sniper Status", callback_data: "sniper_status" }
+            { text: "⚙ Settings", callback_data: "SETTINGS_MENU" },
+            { text: "📡 Sniper Status", callback_data: "SNIPER_STATUS" }
           ],
-          [{ text: "📈 PnL", callback_data: "pnl" }],
-          [{ text: "🔍 Active Signals", callback_data: "signals" }]
+          [{ text: "📈 PnL", callback_data: "PNL_MENU" }],
+          [{ text: "🔍 Active Signals", callback_data: "SIGNALS_MENU" }]
         ]
       }
     };
   },
 
   /* ============================
-      PNL BLOCK
+        PNL BLOCK
   ============================ */
   pnlBlock(pnl = {}) {
     const total = Number(pnl.total ?? 0).toFixed(4);
@@ -143,21 +151,21 @@ Tap a button below to get started 👇
       `*Losses:* ${this.md(losses)}`,
       ``,
       `*Recent Trades:*`,
-      ...recent.map(t => 
+      ...recent.map(t =>
         `• ${this.md(t.token)} — ${this.md(Number(t.profit ?? 0).toFixed(4))} BNB (${t.success ? "🟢" : "🔴"})`
       )
     ].join("\n");
   },
 
   /* ============================
-      CONFIRM BUTTONS
+        CONFIRM BUTTONS
   ============================ */
   confirmButtons(text = "Confirm", cancelText = "Cancel") {
     return {
       reply_markup: {
         inline_keyboard: [
-          [{ text, callback_data: "confirm" }],
-          [{ text: cancelText, callback_data: "cancel" }]
+          [{ text, callback_data: "CONFIRM" }],
+          [{ text: cancelText, callback_data: "CANCEL" }]
         ]
       }
     };
