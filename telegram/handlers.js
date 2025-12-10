@@ -16,14 +16,10 @@ class TelegramHandlers {
       INIT
   =============================== */
   init() {
-    // Start + text
     this.bot.start((ctx) => this.start(ctx));
     this.bot.on("text", (ctx) => this.textHandler(ctx));
-
-    // 🔥 THE FIX: enable button callbacks
     this.bot.on("callback_query", (ctx) => this.handleCallback(ctx));
 
-    // Admin commands
     this.handleAdminCommands(this.bot);
 
     logInfo("Telegram Handlers: READY");
@@ -44,7 +40,7 @@ class TelegramHandlers {
   }
 
   /* ===============================
-      START COMMAND
+      START
   =============================== */
   async start(ctx) {
     try {
@@ -66,22 +62,16 @@ class TelegramHandlers {
 
     logInfo(`Callback => ${data}`);
 
-    // Instant button feedback
-    try {
-      await ctx.answerCbQuery("Processing...");
-    } catch {}
+    try { await ctx.answerCbQuery("Processing..."); } catch {}
 
-    // Prevent spam tapping
     if (!ctx.session) ctx.session = {};
-    if (ctx.session.busy) {
-      return ctx.answerCbQuery("⏳ Please wait...");
-    }
+    if (ctx.session.busy) return ctx.answerCbQuery("⏳ Please wait...");
     ctx.session.busy = true;
     setTimeout(() => (ctx.session.busy = false), 2500);
 
     try {
       /* ============================
-          MAIN UI BUTTONS
+           MAIN UI BUTTONS
       ============================ */
 
       if (data === "ADMIN_DASHBOARD")
@@ -103,26 +93,29 @@ class TelegramHandlers {
         return this.send(chatId, "📨 *Fetching Logs...*\n(Coming soon)");
 
       /* ============================
-          TRADING MODE
+           TRADING
       ============================ */
+
       if (data === "ENABLE_LIVE")
         return this.send(chatId, "🟢 *Live trading enabled*");
 
       if (data === "ENABLE_PAPER")
-        return this.send(chatId, "🧪 *Paper Mode enabled*");
+        return this.send(chatId, "🧪 *Paper mode enabled*");
 
       /* ============================
-          SETTINGS
+           SETTINGS
       ============================ */
+
       if (data === "REFRESH_RPCS")
         return this.send(chatId, "🔁 *Refreshing RPC endpoints...*");
 
       if (data === "ANTI_RUG_SETTINGS")
-        return this.send(chatId, "🛡 *Anti-Rug settings coming soon*");
+        return this.send(chatId, "🛡 *Anti-rug settings coming soon...*");
 
       /* ============================
-          TOKEN ACTIONS
+           TOKEN ACTIONS
       ============================ */
+
       if (data.startsWith("snipe_"))
         return this.handleBuy(chatId, data.replace("snipe_", ""));
 
@@ -133,8 +126,9 @@ class TelegramHandlers {
         return this.send(chatId, "❌ Ignored.");
 
       /* ============================
-          OLD COMPATIBILITY
+           OLD COMPATIBILITY
       ============================ */
+
       if (data.startsWith("BUY_"))
         return this.handleBuy(chatId, data.slice(4));
 
@@ -151,14 +145,38 @@ class TelegramHandlers {
         return this.sniperPreset(chatId, data.replace("SNIPER_PRESET_", ""));
 
       /* ============================
-          UNKNOWN
+           NEWLY MERGED MENUS
       ============================ */
+
+      if (data === "DEV_CHECK_MENU") {
+        return this.send(chatId, "🧪 *Developer Diagnostics*\nComing soon...");
+      }
+
+      if (data === "SNIPER_STATUS") {
+        return this.send(
+          chatId,
+          "🎯 *Sniper Status*\n• Running: No\n• Last trade: None\n• Errors: 0\n\n(Full module coming soon)"
+        );
+      }
+
+      if (data === "PNL_MENU") {
+        return this.send(chatId, "📈 *PNL Dashboard*\nStats loading soon...");
+      }
+
+      if (data === "SIGNALS_MENU") {
+        return this.send(chatId, "📡 *Signals Panel*\nSignals will appear here.");
+      }
+
+      /* ============================
+           UNKNOWN FALLBACK
+      ============================ */
+
       logWarn(`Unknown callback: ${data}`);
       return this.send(chatId, `⚠️ Unknown action: \`${data}\``);
 
     } catch (err) {
       logError("Callback Error", err);
-      return this.send(chatId, "❌ *Internal error while processing action.*");
+      return this.send(chatId, "❌ Internal error while processing action.");
     }
   }
 
@@ -176,14 +194,11 @@ class TelegramHandlers {
       return this.handleWatch(chatId, symbol);
     }
 
-    return this.send(
-      chatId,
-      "❓ *Unknown message*\nSend `$TOKEN` to watch a pair."
-    );
+    return this.send(chatId, "❓ *Unknown message*\nSend `$TOKEN` to watch a pair.");
   }
 
   /* ===============================
-      BUY HANDLER
+      BUY
   =============================== */
   async handleBuy(chatId, pair) {
     try {
@@ -203,7 +218,7 @@ class TelegramHandlers {
   }
 
   /* ===============================
-      WATCH HANDLER
+      WATCH
   =============================== */
   async handleWatch(chatId, symbol) {
     try {
@@ -229,7 +244,6 @@ class TelegramHandlers {
 
   async sniperPreset(chatId, presetId) {
     const preset = presets[presetId];
-
     if (!preset) return this.send(chatId, "❌ Invalid preset");
 
     return this.send(
