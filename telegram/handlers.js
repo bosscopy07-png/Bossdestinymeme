@@ -12,18 +12,26 @@ class TelegramHandlers {
     this.bot = bot;
   }
 
+  /* ===============================
+      INIT
+  =============================== */
   init() {
-    // Basic text + start
+    // Start + text
     this.bot.start((ctx) => this.start(ctx));
     this.bot.on("text", (ctx) => this.textHandler(ctx));
 
-    // Register admin commands
+    // 🔥 THE FIX: enable button callbacks
+    this.bot.on("callback_query", (ctx) => this.handleCallback(ctx));
+
+    // Admin commands
     this.handleAdminCommands(this.bot);
 
     logInfo("Telegram Handlers: READY");
   }
 
-  // Safe MarkdownV2 sender
+  /* ===============================
+      SAFE SEND WRAPPER
+  =============================== */
   async send(chatId, text, extra = {}) {
     try {
       await this.bot.telegram.sendMessage(chatId, text, {
@@ -35,9 +43,9 @@ class TelegramHandlers {
     }
   }
 
-  /* ==============================
-      START
-  ============================== */
+  /* ===============================
+      START COMMAND
+  =============================== */
   async start(ctx) {
     try {
       await this.send(ctx.chat.id, ui.startMessage(), ui.startKeyboard());
@@ -47,92 +55,86 @@ class TelegramHandlers {
     }
   }
 
-  /* ==============================
-      CENTRAL CALLBACK HANDLER
-  ============================== */
+  /* ===============================
+      CALLBACK HANDLER
+  =============================== */
   async handleCallback(ctx) {
     const chatId = ctx.chat?.id;
     const data = ctx.update?.callback_query?.data;
 
     if (!chatId || !data) return;
 
-    logInfo("Callback => " + data);
+    logInfo(`Callback => ${data}`);
+
+    // Instant button feedback
+    try {
+      await ctx.answerCbQuery("Processing...");
+    } catch {}
+
+    // Prevent spam tapping
+    if (!ctx.session) ctx.session = {};
+    if (ctx.session.busy) {
+      return ctx.answerCbQuery("⏳ Please wait...");
+    }
+    ctx.session.busy = true;
+    setTimeout(() => (ctx.session.busy = false), 2500);
 
     try {
-      /* ==============================================
-          CORE UI BUTTONS (100% MATCHES ui.js)
-      =============================================== */
+      /* ============================
+          MAIN UI BUTTONS
+      ============================ */
 
-      if (data === "ADMIN_DASHBOARD") {
+      if (data === "ADMIN_DASHBOARD")
         return this.send(chatId, "📊 *Dashboard*", ui.homeMenu());
-      }
 
-      if (data === "START_SCANNER") {
+      if (data === "START_SCANNER")
         return this.send(chatId, "🟢 *Scanner Started*");
-      }
 
-      if (data === "STOP_SCANNER") {
+      if (data === "STOP_SCANNER")
         return this.send(chatId, "🔴 *Scanner Stopped*");
-      }
 
-      if (data === "TRADING_MENU") {
+      if (data === "TRADING_MENU")
         return this.send(chatId, "💹 *Trading Mode*", ui.tradingMenu());
-      }
 
-      if (data === "SETTINGS_MENU") {
+      if (data === "SETTINGS_MENU")
         return this.send(chatId, "⚙️ *Settings*", ui.settingsMenu());
-      }
 
-      if (data === "VIEW_LOGS") {
+      if (data === "VIEW_LOGS")
         return this.send(chatId, "📨 *Fetching Logs...*\n(Coming soon)");
-      }
 
-      /* ==============================================
+      /* ============================
           TRADING MODE
-      =============================================== */
-
-      if (data === "ENABLE_LIVE") {
+      ============================ */
+      if (data === "ENABLE_LIVE")
         return this.send(chatId, "🟢 *Live trading enabled*");
-      }
 
-      if (data === "ENABLE_PAPER") {
+      if (data === "ENABLE_PAPER")
         return this.send(chatId, "🧪 *Paper Mode enabled*");
-      }
 
-      /* ==============================================
+      /* ============================
           SETTINGS
-      =============================================== */
-
-      if (data === "REFRESH_RPCS") {
+      ============================ */
+      if (data === "REFRESH_RPCS")
         return this.send(chatId, "🔁 *Refreshing RPC endpoints...*");
-      }
 
-      if (data === "ANTI_RUG_SETTINGS") {
-        return this.send(chatId, "🛡 *Anti Rugs settings coming soon*");
-      }
+      if (data === "ANTI_RUG_SETTINGS")
+        return this.send(chatId, "🛡 *Anti-Rug settings coming soon*");
 
-      /* ==============================================
+      /* ============================
           TOKEN ACTIONS
-      =============================================== */
+      ============================ */
+      if (data.startsWith("snipe_"))
+        return this.handleBuy(chatId, data.replace("snipe_", ""));
 
-      if (data.startsWith("snipe_")) {
-        const address = data.replace("snipe_", "");
-        return this.handleBuy(chatId, address);
-      }
+      if (data.startsWith("watch_"))
+        return this.handleWatch(chatId, data.replace("watch_", ""));
 
-      if (data.startsWith("watch_")) {
-        const address = data.replace("watch_", "");
-        return this.handleWatch(chatId, address);
-      }
-
-      if (data.startsWith("ignore_")) {
+      if (data.startsWith("ignore_"))
         return this.send(chatId, "❌ Ignored.");
-      }
 
-      /* ==============================================
-          OLD HANDLERS — KEEP FOR COMPATIBILITY
-      =============================================== */
-
+      /* ============================
+          OLD COMPATIBILITY
+      ============================ */
       if (data.startsWith("BUY_"))
         return this.handleBuy(chatId, data.slice(4));
 
@@ -148,22 +150,21 @@ class TelegramHandlers {
       if (data.startsWith("SNIPER_PRESET_"))
         return this.sniperPreset(chatId, data.replace("SNIPER_PRESET_", ""));
 
-      /* ==============================================
-           UNKNOWN CALLBACK
-      =============================================== */
-      logWarn("Unknown callback: " + data);
-      return this.send(chatId, `⚠️ Unknown action: ${data}`);
+      /* ============================
+          UNKNOWN
+      ============================ */
+      logWarn(`Unknown callback: ${data}`);
+      return this.send(chatId, `⚠️ Unknown action: \`${data}\``);
 
     } catch (err) {
       logError("Callback Error", err);
+      return this.send(chatId, "❌ *Internal error while processing action.*");
     }
-
-    try { await ctx.answerCbQuery(); } catch {}
   }
 
-  /* ==============================
+  /* ===============================
       TEXT HANDLER
-  ============================== */
+  =============================== */
   async textHandler(ctx) {
     const chatId = ctx.chat.id;
     const text = ctx.message.text.trim();
@@ -181,12 +182,13 @@ class TelegramHandlers {
     );
   }
 
-  /* ==============================
-      ACTION HANDLERS
-  ============================== */
+  /* ===============================
+      BUY HANDLER
+  =============================== */
   async handleBuy(chatId, pair) {
     try {
       await this.send(chatId, `🔫 *Sniping* \`${pair}\``);
+
       const result = await router.executeSniper(pair);
 
       await this.send(
@@ -200,6 +202,9 @@ class TelegramHandlers {
     }
   }
 
+  /* ===============================
+      WATCH HANDLER
+  =============================== */
   async handleWatch(chatId, symbol) {
     try {
       await this.send(chatId, `👁 *Watching:* \`${symbol}\``);
@@ -208,10 +213,16 @@ class TelegramHandlers {
     }
   }
 
+  /* ===============================
+      DETAILS
+  =============================== */
   async handleDetails(chatId, pair) {
     await this.send(chatId, `📊 *Fetching details for:* \`${pair}\``);
   }
 
+  /* ===============================
+      SNIPER UI
+  =============================== */
   async openSniper(chatId) {
     return this.send(chatId, ui.sniperMenu(), ui.sniperKeyboard());
   }
@@ -219,8 +230,7 @@ class TelegramHandlers {
   async sniperPreset(chatId, presetId) {
     const preset = presets[presetId];
 
-    if (!preset)
-      return this.send(chatId, "❌ Invalid preset");
+    if (!preset) return this.send(chatId, "❌ Invalid preset");
 
     return this.send(
       chatId,
@@ -228,9 +238,9 @@ class TelegramHandlers {
     );
   }
 
-  /* ==============================
-      ADMIN HANDLERS
-  ============================== */
+  /* ===============================
+      ADMIN COMMANDS
+  =============================== */
   handleAdminCommands(bot) {
     bot.command("admin", async (ctx) => {
       if (String(ctx.from.id) !== String(config.ADMIN_CHAT_ID))
@@ -250,5 +260,12 @@ class TelegramHandlers {
     });
   }
 }
+
+/* ===============================
+    GLOBAL ERROR CATCHER
+=============================== */
+process.on("unhandledRejection", (reason) => {
+  logError("Unhandled Promise Rejection:", reason);
+});
 
 export default TelegramHandlers;
