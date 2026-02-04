@@ -1,4 +1,3 @@
-// FILE: telegram/sender.js
 import { Markup } from "telegraf";
 import fs from "fs";
 import config from "../config/index.js";
@@ -9,8 +8,7 @@ import { escapeMarkdownV2 } from "../utils/format.js";
 // INTERNAL STATE
 // ----------------------
 let adminNotifier = null;
-
-function registerAdminNotifier(fn) {
+export function registerAdminNotifier(fn) {
   adminNotifier = fn;
 }
 
@@ -23,7 +21,7 @@ let seenPairs = new Set();
 try {
   if (fs.existsSync(SEEN_FILE)) {
     const fileData = JSON.parse(fs.readFileSync(SEEN_FILE, "utf8"));
-    seenPairs = new Set(fileData);
+    seenPairs = new Set(fileData.map((a) => a.toLowerCase()));
   }
 } catch (err) {
   logError("Failed to load seen pairs file", err);
@@ -37,11 +35,11 @@ function saveSeen() {
   }
 }
 
-function isPairSent(address) {
+export function isPairSent(address) {
   return seenPairs.has(address.toLowerCase());
 }
 
-function markPairAsSent(address) {
+export function markPairAsSent(address) {
   const key = address.toLowerCase();
   if (!seenPairs.has(key)) {
     seenPairs.add(key);
@@ -52,24 +50,24 @@ function markPairAsSent(address) {
 // ----------------------
 // UNIVERSAL SENDER
 // ----------------------
-async function send(chatId, payload = {}) {
+export async function send(bot, chatId, payload = {}) {
   try {
     const text = payload.text || "";
     const options = payload.options || {};
-
-    return await global.bot.telegram.sendMessage(chatId, escapeMarkdownV2(text), {
+    return await bot.telegram.sendMessage(chatId, escapeMarkdownV2(text), {
       parse_mode: "MarkdownV2",
       ...options
     });
   } catch (err) {
     logError("Sender.send() failed", err);
+    if (adminNotifier) adminNotifier(`❗ *Sender Error*\n${escapeMarkdownV2(err.message)}`);
   }
 }
 
 // ----------------------
 // BUILD SIGNAL MESSAGE
 // ----------------------
-function buildSignalMessage(signal) {
+export function buildSignalMessage(signal) {
   return `
 *NEW TOKEN DETECTED – HYPER BEAST MODE*
 ━━━━━━━━━━━━━━
@@ -93,7 +91,7 @@ function buildSignalMessage(signal) {
 // ----------------------
 // SEND SIGNAL
 // ----------------------
-async function sendTokenSignal(bot, chatId, signal) {
+export async function sendTokenSignal(bot, chatId, signal) {
   try {
     if (isPairSent(signal.address)) {
       logInfo(`Signal already sent: ${signal.symbol} (${signal.address})`);
@@ -130,7 +128,6 @@ async function sendTokenSignal(bot, chatId, signal) {
 // ----------------------
 export async function sendAdminNotification(bot, message) {
   if (!config.ADMIN_CHAT_ID) return;
-
   try {
     await bot.telegram.sendMessage(
       config.ADMIN_CHAT_ID,
@@ -141,16 +138,4 @@ export async function sendAdminNotification(bot, message) {
   } catch (err) {
     logError("Failed to send admin message", err);
   }
-}
-
-// ----------------------
-// EXPORTS
-// ----------------------
-export default {
-  send,
-  sendTokenSignal,
-  sendAdminNotification,
-  registerAdminNotifier,
-  isPairSent,
-  markPairAsSent
-};
+      }
