@@ -1,7 +1,7 @@
 import "dotenv/config";
-import { logInfo, logError } from "./utils/logs.js";
+import { logInfo, logError, logWarn } from "./utils/logs.js";
 
-import { initState } from "./core/state.js";
+import state from "./core/state.js";
 import { startRpcHealth } from "./core/rpcHealth.js";
 
 import { startDexScanner } from "./scanner/dexScanner.js";
@@ -13,8 +13,12 @@ import { initSignalProcessor } from "./signals/processor.js";
 // ENV VALIDATION
 // ----------------------
 function validateEnv() {
-  const required = ["BSC_RPC", "ADMIN_CHAT_ID"];
-  const missing = required.filter((k) => !process.env[k]);
+  const required = [
+    "ADMIN_CHAT_ID",
+    "RPC_URLS"
+  ];
+
+  const missing = required.filter(k => !process.env[k]);
 
   if (missing.length) {
     throw new Error(`Missing env vars: ${missing.join(", ")}`);
@@ -26,32 +30,37 @@ function validateEnv() {
 // ----------------------
 async function bootEngine() {
   try {
-    logInfo("🚀 Booting CORE ENGINE...");
+    logInfo("🚀 Booting CORE ENGINE");
 
+    // 1️⃣ Validate environment early
     validateEnv();
+    logInfo("✅ Environment validated");
 
-    // 1️⃣ Global state
-    initState();
-    logInfo("🧠 State initialized");
+    // 2️⃣ Initialize core state (singleton already constructed)
+    if (!state.initialized) {
+      state.initialized = true;
+      state.startedAt = Date.now();
+    }
+    logInfo("🧠 Core state ready");
 
-    // 2️⃣ Signal pipeline
+    // 3️⃣ Signal pipeline (must exist before scanners)
     initSignalProcessor();
-    logInfo("🔗 Signal processor ready");
+    logInfo("🔗 Signal processor initialized");
 
-    // 3️⃣ RPC health (must be early)
+    // 4️⃣ RPC health (before any chain calls)
     startRpcHealth();
-    logInfo("💓 RPC health monitor started");
+    logInfo("💓 RPC health monitor running");
 
-    // 4️⃣ Scanners (last)
+    // 5️⃣ Scanners (last, depend on everything above)
     startDexScanner();
-    logInfo("🔍 DEX scanner running");
+    logInfo("🔍 DEX scanner started");
 
     startGeckoScanner();
-    logInfo("🦎 Gecko scanner running");
+    logInfo("🦎 Gecko scanner started");
 
-    logInfo("✅ CORE ENGINE RUNNING");
+    logInfo("✅ CORE ENGINE FULLY OPERATIONAL");
   } catch (err) {
-    logError("❌ Engine boot failed", err);
+    logError("❌ CORE ENGINE BOOT FAILED", err);
     process.exit(1);
   }
 }
@@ -59,10 +68,26 @@ async function bootEngine() {
 // ----------------------
 // GRACEFUL SHUTDOWN
 // ----------------------
-function shutdown(signal) {
-  logInfo(`🛑 Shutdown signal received: ${signal}`);
-  // optional: persist state, flush queues, close RPCs
-  process.exit(0);
+let shuttingDown = false;
+
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  logWarn(`🛑 Shutdown initiated (${signal})`);
+
+  try {
+    // Future-safe hooks
+    // await flushQueues();
+    // await closeDB();
+    // await stopScanners();
+
+    logInfo("✅ Shutdown clean");
+  } catch (err) {
+    logError("Shutdown error", err);
+  } finally {
+    process.exit(0);
+  }
 }
 
 process.on("SIGINT", shutdown);
@@ -81,4 +106,13 @@ process.on("uncaughtException", (err) => {
 });
 
 // ----------------------
+// START ENGINE
+// ----------------------
 bootEngine();
+
+// ----------------------
+// HEARTBEAT (LIVENESS)
+// ----------------------
+setInterval(() => {
+  logInfo("🫀 Core engine alive");
+}, 60_000);
