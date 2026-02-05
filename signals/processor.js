@@ -2,12 +2,11 @@
  * FILE: signals/processor.js
  *
  * Hyper Beast Token / Pair Signal Processor
- *
- * Computes anti-rug heuristics, owner concentration, liquidity/volume scoring,
- * bytecode suspicious detection, honeypot checks, and generates enriched details
- * for Telegram/trading bots.
- *
- * Returns: { id, token, score, riskLevel, flags, details }
+ * - Anti-rug heuristics
+ * - Owner concentration
+ * - Liquidity/volume scoring
+ * - Honeypot & suspicious bytecode detection
+ * - Telegram-ready enriched payload
  */
 
 import Pino from "pino";
@@ -16,6 +15,8 @@ import axios from "axios";
 import config from "../config/index.js";
 import * as dsUtils from "../utils/dexscreener.js";
 import { getProvider, withRetries } from "../utils/web3.js";
+import { notifyTelegram } from "../telegram/sender.js";
+import { logInfo, logError } from "../utils/logs.js";
 
 const log = Pino({ level: config.LOG_LEVEL || "info" });
 
@@ -23,39 +24,37 @@ const log = Pino({ level: config.LOG_LEVEL || "info" });
 function uid(prefix = "") {
   return `${prefix}${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
 }
+
 function toNumberSafe(v, fallback = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
+
 function riskFromScore(score) {
   if (score >= 75) return "LOW";
   if (score >= 45) return "MEDIUM";
   return "HIGH";
 }
+
 function basicBytecodeFlags(bytecode = "") {
+  if (!bytecode || bytecode === "0x") return ["no_bytecode"];
   const flags = [];
-  const b = (bytecode || "").toLowerCase();
-  if (!b || b === "0x") {
-    flags.push("no_bytecode");
-    return flags;
-  }
+  const b = bytecode.toLowerCase();
   const suspects = [
-    "mint", "burn", "blacklist", "whitelist", "settax", "setfee", "maxtx", "maxwallet",
-    "renounce", "owner", "onlyowner", "lock", "unlock", "pause", "swapandliquify",
-    "sniper", "antibot", "trading", "transferownership", "isexcludedfromfee"
+    "mint","burn","blacklist","whitelist","settax","setfee","maxtx","maxwallet",
+    "renounce","owner","onlyowner","lock","unlock","pause","swapandliquify",
+    "sniper","antibot","trading","transferownership","isexcludedfromfee"
   ];
-  for (const s of suspects) {
-    if (b.includes(s.toLowerCase())) flags.push(`bytecode_contains_${s.toLowerCase()}`);
-  }
+  for (const s of suspects) if (b.includes(s)) flags.push(`bytecode_contains_${s}`);
   return flags;
 }
+
 function computeWeightsScore(metrics = {}, weights = {}) {
-  let totalWeight = 0, sum = 0;
+  let sum = 0, totalWeight = 0;
   for (const k of Object.keys(weights)) {
     const w = Number(weights[k] ?? 0);
     totalWeight += w;
-    const m = Number(metrics[k] ?? 0);
-    sum += m * w;
+    sum += toNumberSafe(metrics[k]) * w;
   }
   if (totalWeight <= 0) return 0;
   return Math.round(Math.max(0, Math.min(1, sum / totalWeight)) * 100);
@@ -79,60 +78,40 @@ async function honeypotHeuristic(dexData = {}, provider, tokenAddress) {
     const MIN_LIQ = (config.ANTIRUG?.MIN_LIQUIDITY_BNB ?? 0.5) * (config.ANTIRUG?.BNB_USD_PRICE ?? 300);
     if (liquidityUSD < MIN_LIQ) flags.push("low_liquidity_usd");
     if (holders < (config.ANTIRUG?.MIN_HOLDERS ?? 20)) flags.push("low_holder_count");
-    if (buyTax > (config.ANTIRUG?.HIGH_TAX_THRESHOLD_PERCENT ?? 25) || sellTax > (config.ANTIRUG?.HIGH_TAX_THRESHOLD_PERCENT ?? 25)) {
-      flags.push("high_tax");
-    }
+    if (buyTax > (config.ANTIRUG?.HIGH_TAX_THRESHOLD_PERCENT ?? 25) || sellTax > (config.ANTIRUG?.HIGH_TAX_THRESHOLD_PERCENT ?? 25)) flags.push("high_tax");
 
-    let bytecode = "";
-    try {
-      bytecode = await withRetries(() => provider.getCode(tokenAddress));
-      const bcFlags = basicBytecodeFlags(bytecode);
-      if (bcFlags.length) flags.push(...bcFlags);
-      details.bytecodeLength = bytecode.length;
-    } catch (err) {
-      log.warn({ err: err?.message }, "Bytecode fetch failed");
-      details.bytecodeError = err?.message ?? String(err);
-    }
+    // --- Fetch bytecode once ---
+    const bytecode = await withRetries(() => provider.getCode(tokenAddress));
+    details.bytecodeLength = bytecode.length;
+    flags.push(...basicBytecodeFlags(bytecode));
 
-  } catch (e) {
-    log.warn({ err: e?.message }, "honeypotHeuristic error");
+  } catch (err) {
+    log.warn({ err: err?.message }, "honeypotHeuristic failed");
+    details.bytecodeError = err?.message ?? String(err);
   }
-
   return { flags: Array.from(new Set(flags)), details };
 }
 
 // --- Main analyzer ---
 export async function analyzeToken(tokenAddress, dsRaw = {}) {
   const id = uid("sig_");
-  const out = {
-    id,
-    token: tokenAddress,
-    score: 100,
-    riskLevel: "LOW",
-    flags: [],
-    details: {},
-    timestamp: Date.now()
-  };
-
-  if (!tokenAddress) {
-    out.flags.push("invalid_address");
-    return out;
-  }
+  const out = { id, token: tokenAddress, score: 100, riskLevel: "LOW", flags: [], details: {}, timestamp: Date.now() };
+  if (!tokenAddress) { out.flags.push("invalid_address"); return out; }
 
   const provider = getProvider();
 
-  // --- Fetch Dexscreener data if needed ---
+  // --- Dexscreener fetch & fallback ---
   let dsData = dsRaw && Object.keys(dsRaw).length ? dsRaw : {};
   if (!dsData || Object.keys(dsData).length === 0) {
     try {
-      if (typeof dsUtils.getPair === "function") dsData = await dsUtils.getPair(tokenAddress);
-      else if (typeof dsUtils.fetchTokenFromDexscreener === "function") dsData = await dsUtils.fetchTokenFromDexscreener(tokenAddress);
+      if (typeof dsUtils.getCached === "function") dsData = dsUtils.getCached(tokenAddress) ?? {};
+      else if (typeof dsUtils.fetchToken === "function") dsData = await dsUtils.fetchToken(tokenAddress) ?? {};
       else {
         const resp = await axios.get(`${config.DEXSCREENER_API}${tokenAddress}`, { timeout: 8000 });
-        dsData = resp.data || {};
+        dsData = resp.data ?? {};
       }
     } catch (err) {
-      log.warn({ err: err?.message, tokenAddress }, "Failed fetching Dexscreener data");
+      log.warn({ err: err?.message, tokenAddress }, "Dexscreener fetch failed");
       dsData = {};
     }
   }
@@ -155,40 +134,29 @@ export async function analyzeToken(tokenAddress, dsRaw = {}) {
     ], provider);
 
     const totalSupply = await withRetries(() => tokenContract.totalSupply());
-    const ownerAddr = await withRetries(() => tokenContract.owner?.());
+    const ownerAddr = await withRetries(async () => tokenContract.owner?.() ?? "0x0000000000000000000000000000000000000000");
     if (ownerAddr && totalSupply > 0n) {
       const ownerBalance = await withRetries(() => tokenContract.balanceOf(ownerAddr));
-      const ownerPct = Number(ownerBalance * 100n / totalSupply);
+      const ownerPct = Number((ownerBalance * 10000n / totalSupply)/100);
       out.details.ownerPct = ownerPct;
       if (ownerPct > 50) { out.score -= 30; out.flags.push("highOwnerPct"); }
       else if (ownerPct > 30) { out.score -= 15; out.flags.push("moderateOwnerPct"); }
     }
-  } catch (e) {
-    log.debug({ err: e?.message, tokenAddress }, "Owner concentration skipped");
-  }
+  } catch (e) { log.debug({ err: e?.message, tokenAddress }, "Owner concentration skipped"); }
 
-  // --- Honeypot & bytecode ---
+  // --- Honeypot & bytecode analysis ---
   const hp = await honeypotHeuristic(dsData, provider, tokenAddress);
-  if (hp.flags.length) out.flags.push(...hp.flags);
+  out.flags.push(...hp.flags);
   out.details.honeypotDetails = hp.details ?? {};
 
-  // --- Contract suspicious functions ---
-  try {
-    const bytecode = await withRetries(() => provider.getCode(tokenAddress));
-    const suspiciousPatterns = /(mint|blacklist|setFee|setTradingEnabled|withdraw|emergencyWithdraw)/i;
-    if (suspiciousPatterns.test(bytecode)) { out.score -= 20; out.flags.push("suspiciousBytecode"); }
-  } catch {}
-
-  // --- Volume heuristics ---
+  // --- Volume / liquidity heuristics ---
   if (volume24h > 1_000_000) out.flags.push("highVolume");
   if (volume24h > 5_000_000) out.score -= 10;
 
-  // --- Liquidity weighting & metrics ---
   const liqThresholdUsd = (config.SNIPER?.MIN_LIQUIDITY_BNB ?? 0.5) * (config.ANTIRUG?.BNB_USD_PRICE ?? 300);
   const liquidityMetric = Math.min(1, liquidityUSD / Math.max(1, liqThresholdUsd));
   out.details.liquidityMetric = liquidityMetric;
 
-  // --- Weighted scoring vector ---
   const metrics = {
     liquidity: liquidityMetric,
     contract: 1 - ((out.details.ownerPct ?? 0) / 100),
@@ -200,7 +168,6 @@ export async function analyzeToken(tokenAddress, dsRaw = {}) {
   out.score = score;
   out.riskLevel = riskFromScore(score);
 
-  // --- Flags from thresholds ---
   if (liquidityMetric < 0.2) out.flags.push("low_liquidity");
   if ((out.details.ownerPct ?? 0) > 60) out.flags.push("dev_concentration_high");
   if (volume24h / Math.max(1, liquidityUSD) > 3) out.flags.push("abnormal_volume_spike");
@@ -210,16 +177,9 @@ export async function analyzeToken(tokenAddress, dsRaw = {}) {
   // --- Recommendations ---
   const recommended = {};
   const defaultBuyPercent = config.SNIPER?.DEFAULT_BUY_PERCENT ?? 0.5;
-  if (out.riskLevel === "LOW") {
-    recommended.recommendedBuyPercent = Math.min(2, defaultBuyPercent);
-    recommended.minBuyUsd = Math.max(1,1);
-  } else if (out.riskLevel === "MEDIUM") {
-    recommended.recommendedBuyPercent = Math.max(0, defaultBuyPercent/2);
-    recommended.minBuyUsd = Math.max(1,2);
-  } else {
-    recommended.recommendedBuyPercent = 0;
-    recommended.minBuyUsd = Math.max(1,5);
-  }
+  if (out.riskLevel === "LOW") { recommended.recommendedBuyPercent = Math.min(2, defaultBuyPercent); recommended.minBuyUsd = Math.max(1, 1); }
+  else if (out.riskLevel === "MEDIUM") { recommended.recommendedBuyPercent = Math.max(0, defaultBuyPercent/2); recommended.minBuyUsd = 2; }
+  else { recommended.recommendedBuyPercent = 0; recommended.minBuyUsd = 5; }
   out.details.recommended = recommended;
 
   // --- Dex summary ---
@@ -231,6 +191,15 @@ export async function analyzeToken(tokenAddress, dsRaw = {}) {
 
   log.info({ id, tokenAddress, score: out.score, risk: out.riskLevel, flags: out.flags }, "Processed token");
   return out;
+}
+
+// --- Signal processor ---
+export function initSignalProcessor() { logInfo("🧠 Signal processor ready"); }
+
+export function processSignal(signal) {
+  // --- Risk filter: only send LOW/MEDIUM signals ---
+  if (!signal || signal.score < (config.SNIPER?.MIN_SCORE ?? 40)) return;
+  notifyTelegram(signal);
 }
 
 export default { analyzeToken };
