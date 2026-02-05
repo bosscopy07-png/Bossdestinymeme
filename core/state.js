@@ -1,4 +1,5 @@
 // FILE: core/state.js
+
 import EventEmitter from "eventemitter3";
 import { logInfo, logWarn } from "../utils/logs.js";
 
@@ -11,10 +12,15 @@ class CoreState extends EventEmitter {
     super();
 
     // ----------------------------
-    // BOT & SYSTEM
+    // SYSTEM
+    // ----------------------------
+    this.startedAt = Date.now();
+    this.initialized = false;
+
+    // ----------------------------
+    // BOT
     // ----------------------------
     this.bot = null;
-    this.initialized = false;
 
     // ----------------------------
     // MODES
@@ -30,18 +36,36 @@ class CoreState extends EventEmitter {
     this.watchlist = new Set();
 
     // ----------------------------
+    // RPC
+    // ----------------------------
+    this.rpc = {
+      active: null,
+      failed: new Set(),
+    };
+
+    // ----------------------------
     // METRICS
     // ----------------------------
     this.stats = {
-      signals: 0,
+      scanned: 0,
+      signaled: 0,
       buys: 0,
       sells: 0,
-      errors: 0
+      errors: 0,
     };
   }
 
   /* ============================
-      BOT REGISTRATION
+      INITIALIZATION
+  ============================ */
+  init() {
+    if (this.initialized) return;
+    this.initialized = true;
+    logInfo("CoreState initialized");
+  }
+
+  /* ============================
+      BOT
   ============================ */
   registerBot(bot) {
     this.bot = bot;
@@ -53,7 +77,7 @@ class CoreState extends EventEmitter {
   }
 
   /* ============================
-      SCANNER STATE
+      SCANNER
   ============================ */
   startScanner() {
     if (this.scannerRunning) return;
@@ -69,12 +93,8 @@ class CoreState extends EventEmitter {
     logInfo("Scanner stopped");
   }
 
-  isScannerRunning() {
-    return this.scannerRunning;
-  }
-
   /* ============================
-      TRADING STATE
+      TRADING
   ============================ */
   enableSniper() {
     this.sniperEnabled = true;
@@ -90,7 +110,7 @@ class CoreState extends EventEmitter {
 
   setTradingMode(mode) {
     if (!["paper", "live"].includes(mode)) {
-      logWarn("Invalid trading mode: " + mode);
+      logWarn(`Invalid trading mode: ${mode}`);
       return;
     }
     this.tradingMode = mode;
@@ -99,16 +119,21 @@ class CoreState extends EventEmitter {
   }
 
   /* ============================
-      SIGNAL MANAGEMENT
+      SIGNALS
   ============================ */
   addSignal(signal) {
     if (!signal?.address) return;
-    this.activeSignals.set(signal.address.toLowerCase(), signal);
-    this.stats.signals++;
+    const key = signal.address.toLowerCase();
+
+    if (this.activeSignals.has(key)) return;
+
+    this.activeSignals.set(key, signal);
+    this.stats.signaled++;
     this.emit("signal:new", signal);
   }
 
   removeSignal(address) {
+    if (!address) return;
     this.activeSignals.delete(address.toLowerCase());
   }
 
@@ -134,6 +159,10 @@ class CoreState extends EventEmitter {
   /* ============================
       STATS
   ============================ */
+  recordScan() {
+    this.stats.scanned++;
+  }
+
   recordBuy() {
     this.stats.buys++;
   }
@@ -151,8 +180,20 @@ class CoreState extends EventEmitter {
   }
 }
 
-// ----------------------------
-// SINGLETON EXPORT
-// ----------------------------
+/* ============================
+    SINGLETON EXPORT
+============================ */
 const state = new CoreState();
 export default state;
+
+/* ============================
+    SAFE INITIALIZER
+============================ */
+export function initState() {
+  state.init();
+  return state;
+}
+
+export function getState() {
+  return state;
+  }
