@@ -1,35 +1,66 @@
-import { getWeb3, rotateRPC } from "./rpcManager.js";
+// FILE: core/rpcHealth.js
+
+import { getState } from "./state.js";
+import { logInfo, logError } from "../utils/logs.js";
+import Web3 from "web3";
+
+const RPC_LIST = process.env.RPC_URLS?.split(",").map(r => r.trim()).filter(Boolean) || [];
+
+const HEALTH_INTERVAL = 15_000;
+const MAX_FAILURES = 3;
 
 let checking = false;
 let failureCount = 0;
 
-const MAX_FAILURES = 3;     // rotate only after 3 consecutive failures
-const HEALTH_INTERVAL = 15_000;
+export function startRpcHealth() {
+  const state = getState();
 
-export function startRPCHealthCheck() {
+  if (!RPC_LIST.length) {
+    throw new Error("RPC Health: No RPC_URLS provided");
+  }
+
+  // Initialize RPC state
+  state.rpc.active = RPC_LIST[0];
+  state.rpc.failed.clear();
+
+  logInfo(`🌐 Active RPC initialized: ${state.rpc.active}`);
+
   setInterval(async () => {
     if (checking) return;
     checking = true;
 
     try {
-      const web3 = await getWeb3();
+      const web3 = new Web3(state.rpc.active);
 
-      // Lightweight health probe
+      // Lightweight but real probe
       await web3.eth.getBlockNumber();
 
-      // Reset failures on success
+      // Healthy → reset failure counter
       failureCount = 0;
     } catch (err) {
       failureCount++;
-      console.warn(
-        `⚠️ RPC health check failed (${failureCount}/${MAX_FAILURES}):`,
-        err.message
+      logError(
+        `⚠️ RPC failure (${failureCount}/${MAX_FAILURES})`,
+        err?.message || err
       );
 
       if (failureCount >= MAX_FAILURES) {
-        console.warn("🔄 RPC marked unhealthy, rotating...");
+        // Mark RPC as failed
+        state.rpc.failed.add(state.rpc.active);
+
+        // Pick next healthy RPC
+        const next = RPC_LIST.find(r => !state.rpc.failed.has(r));
+
+        if (!next) {
+          logError("🚨 ALL RPCs FAILED — resetting failure pool");
+          state.rpc.failed.clear();
+          state.rpc.active = RPC_LIST[0];
+        } else {
+          state.rpc.active = next;
+        }
+
+        logInfo(`🔁 Switched RPC to ${state.rpc.active}`);
         failureCount = 0;
-        await rotateRPC();
       }
     } finally {
       checking = false;
