@@ -1,5 +1,6 @@
 import { Markup } from "telegraf";
 import fs from "fs";
+import path from "path";
 import config from "../config/index.js";
 import { logInfo, logError } from "../utils/logs.js";
 import { escapeMarkdownV2 } from "../utils/format.js";
@@ -15,13 +16,15 @@ export function registerAdminNotifier(fn) {
 // ----------------------
 // SEEN PAIRS STORAGE
 // ----------------------
-const SEEN_FILE = "./seen_pairs.json";
+const SEEN_FILE = path.resolve(process.cwd(), "seen_pairs.json");
 let seenPairs = new Set();
 
 try {
   if (fs.existsSync(SEEN_FILE)) {
     const fileData = JSON.parse(fs.readFileSync(SEEN_FILE, "utf8"));
-    seenPairs = new Set(fileData.map((a) => a.toLowerCase()));
+    if (Array.isArray(fileData)) {
+      seenPairs = new Set(fileData.map(a => a.toLowerCase()));
+    }
   }
 } catch (err) {
   logError("Failed to load seen pairs file", err);
@@ -54,13 +57,21 @@ export async function send(bot, chatId, payload = {}) {
   try {
     const text = payload.text || "";
     const options = payload.options || {};
-    return await bot.telegram.sendMessage(chatId, escapeMarkdownV2(text), {
-      parse_mode: "MarkdownV2",
-      ...options
-    });
+
+    return await bot.telegram.sendMessage(
+      chatId,
+      escapeMarkdownV2(text),
+      {
+        parse_mode: "MarkdownV2",
+        disable_web_page_preview: true,
+        ...options
+      }
+    );
   } catch (err) {
     logError("Sender.send() failed", err);
-    if (adminNotifier) adminNotifier(`❗ *Sender Error*\n${escapeMarkdownV2(err.message)}`);
+    if (adminNotifier) {
+      adminNotifier(`Sender Error: ${err.message}`);
+    }
   }
 }
 
@@ -69,23 +80,20 @@ export async function send(bot, chatId, payload = {}) {
 // ----------------------
 export function buildSignalMessage(signal) {
   return `
-*NEW TOKEN DETECTED – HYPER BEAST MODE*
+*🚨 NEW TOKEN DETECTED*
 ━━━━━━━━━━━━━━
 🏷️ *Name:* ${escapeMarkdownV2(signal.token)} (${escapeMarkdownV2(signal.symbol)})
-💠 *Address:* \`${escapeMarkdownV2(signal.address)}\`
-💵 *Price:* $${signal.price?.toFixed(4) || "0.0000"}
-🌊 *Liquidity:* $${signal.liquidity?.usd?.toLocaleString() || "0"}
-📊 *Volume (24h):* $${signal.volume?.h24?.toLocaleString() || "0"}
-⏱️ *Age:* ${signal.age || "Unknown"}
-🔗 *Chart:* [View Chart](${signal.pairUrl || "https://dexscreener.com"})
-🛡️ *Risk Level:* ${signal.riskLevel || "HIGH"}
-💯 *Signal Strength:* STRONG
+💠 *Address:* \`${signal.address}\`
+💵 *Price:* $${signal.price?.toFixed(6) ?? "0.000000"}
+🌊 *Liquidity:* $${signal.liquidity?.usd?.toLocaleString() ?? "0"}
+📊 *Volume (24h):* $${signal.volume?.h24?.toLocaleString() ?? "0"}
+⏱️ *Age:* ${escapeMarkdownV2(signal.age ?? "Unknown")}
+🛡️ *Risk:* ${escapeMarkdownV2(signal.riskLevel ?? "HIGH")}
 ━━━━━━━━━━━━━━
-*Holders:* ${signal.holders?.toLocaleString() || "N/A"}
-*FDV:* $${signal.fdv?.toLocaleString() || "0"}
-*Owner %:* ${signal.ownerPct || "N/A"}
-*Flags:* ${signal.flags?.map(escapeMarkdownV2).join(", ") || "None"}
-`;
+👥 *Holders:* ${signal.holders?.toLocaleString() ?? "N/A"}
+💰 *FDV:* $${signal.fdv?.toLocaleString() ?? "0"}
+🚩 *Flags:* ${signal.flags?.length ? signal.flags.map(escapeMarkdownV2).join(", ") : "None"}
+`.trim();
 }
 
 // ----------------------
@@ -93,32 +101,40 @@ export function buildSignalMessage(signal) {
 // ----------------------
 export async function sendTokenSignal(bot, chatId, signal) {
   try {
+    if (!signal?.address) return;
+
     if (isPairSent(signal.address)) {
-      logInfo(`Signal already sent: ${signal.symbol} (${signal.address})`);
+      logInfo(`Signal already sent: ${signal.symbol}`);
       return;
     }
 
     const message = buildSignalMessage(signal);
 
-    const buttons = Markup.inlineKeyboard([
+    const keyboard = Markup.inlineKeyboard([
       [
-        Markup.button.callback("💥 Snipe Now", `BUY_${signal.address}`),
+        Markup.button.callback("💥 Snipe", `BUY_${signal.address}`),
         Markup.button.callback("👀 Watch", `WATCH_${signal.address}`)
       ],
-      [Markup.button.callback("ℹ Details", `DETAILS_${signal.address}`)]
+      [
+        Markup.button.url(
+          "📈 Chart",
+          signal.pairUrl || "https://dexscreener.com"
+        )
+      ]
     ]);
 
     await bot.telegram.sendMessage(chatId, message, {
       parse_mode: "MarkdownV2",
-      ...buttons
+      disable_web_page_preview: true,
+      reply_markup: keyboard.reply_markup
     });
 
     markPairAsSent(signal.address);
-    logInfo(`Signal delivered: ${signal.symbol} (${signal.address})`);
+    logInfo(`Signal delivered: ${signal.symbol}`);
   } catch (err) {
     logError("Failed to send token signal", err);
     if (adminNotifier) {
-      adminNotifier(`❗ *Signal Error*\n${escapeMarkdownV2(err.message)}`);
+      adminNotifier(`Signal Error: ${err.message}`);
     }
   }
 }
@@ -128,6 +144,7 @@ export async function sendTokenSignal(bot, chatId, signal) {
 // ----------------------
 export async function sendAdminNotification(bot, message) {
   if (!config.ADMIN_CHAT_ID) return;
+
   try {
     await bot.telegram.sendMessage(
       config.ADMIN_CHAT_ID,
@@ -138,4 +155,15 @@ export async function sendAdminNotification(bot, message) {
   } catch (err) {
     logError("Failed to send admin message", err);
   }
-      }
+}
+
+// ----------------------
+// FALLBACK SIMPLE NOTIFIER
+// ----------------------
+export async function notifyTelegram(bot, chatId, text) {
+  try {
+    await send(bot, chatId, { text });
+  } catch (err) {
+    logError("notifyTelegram failed", err);
+  }
+}
