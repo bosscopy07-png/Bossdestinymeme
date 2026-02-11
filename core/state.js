@@ -25,9 +25,9 @@ class CoreState extends EventEmitter {
     // ----------------------------
     // MODES / CONTROL
     // ----------------------------
-    this.tradingMode = "paper"; // paper | live
-    this.sniperEnabled = false;
-    this.scannerRunning = false;
+    this.tradingMode = "live"; // paper | live
+    this.sniperEnabled = true;
+    this.scannerRunning = true;
     this.signalingEnabled = true;
 
     // ----------------------------
