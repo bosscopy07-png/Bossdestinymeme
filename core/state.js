@@ -23,11 +23,12 @@ class CoreState extends EventEmitter {
     this.bot = null;
 
     // ----------------------------
-    // MODES
+    // MODES / CONTROL
     // ----------------------------
     this.tradingMode = "paper"; // paper | live
     this.sniperEnabled = false;
     this.scannerRunning = false;
+    this.signalingEnabled = true;
 
     // ----------------------------
     // RUNTIME DATA
@@ -40,7 +41,7 @@ class CoreState extends EventEmitter {
     // ----------------------------
     this.rpc = {
       active: null,
-      failed: new Set(),
+      failed: new Set()
     };
 
     // ----------------------------
@@ -49,9 +50,10 @@ class CoreState extends EventEmitter {
     this.stats = {
       scanned: 0,
       signaled: 0,
+      sent: 0,
       buys: 0,
       sells: 0,
-      errors: 0,
+      errors: 0
     };
   }
 
@@ -61,7 +63,7 @@ class CoreState extends EventEmitter {
   init() {
     if (this.initialized) return;
     this.initialized = true;
-    logInfo("CoreState initialized");
+    logInfo("🧠 CoreState initialized");
   }
 
   /* ============================
@@ -69,7 +71,7 @@ class CoreState extends EventEmitter {
   ============================ */
   registerBot(bot) {
     this.bot = bot;
-    logInfo("CoreState: Bot registered");
+    logInfo("🤖 Bot registered in CoreState");
   }
 
   getBot() {
@@ -83,14 +85,14 @@ class CoreState extends EventEmitter {
     if (this.scannerRunning) return;
     this.scannerRunning = true;
     this.emit("scanner:start");
-    logInfo("Scanner started");
+    logInfo("🔍 Scanner started");
   }
 
   stopScanner() {
     if (!this.scannerRunning) return;
     this.scannerRunning = false;
     this.emit("scanner:stop");
-    logInfo("Scanner stopped");
+    logInfo("🛑 Scanner stopped");
   }
 
   /* ============================
@@ -99,13 +101,13 @@ class CoreState extends EventEmitter {
   enableSniper() {
     this.sniperEnabled = true;
     this.emit("sniper:enabled");
-    logInfo("Sniper ENABLED");
+    logInfo("🎯 Sniper ENABLED");
   }
 
   disableSniper() {
     this.sniperEnabled = false;
     this.emit("sniper:disabled");
-    logInfo("Sniper DISABLED");
+    logInfo("🛑 Sniper DISABLED");
   }
 
   setTradingMode(mode) {
@@ -115,7 +117,7 @@ class CoreState extends EventEmitter {
     }
     this.tradingMode = mode;
     this.emit("mode:changed", mode);
-    logInfo(`Trading mode set to ${mode}`);
+    logInfo(`💱 Trading mode set to ${mode}`);
   }
 
   /* ============================
@@ -163,6 +165,10 @@ class CoreState extends EventEmitter {
     this.stats.scanned++;
   }
 
+  recordSent() {
+    this.stats.sent++;
+  }
+
   recordBuy() {
     this.stats.buys++;
   }
@@ -187,7 +193,7 @@ const state = new CoreState();
 export default state;
 
 /* ============================
-    SAFE INITIALIZER
+    SAFE ACCESSORS
 ============================ */
 export function initState() {
   state.init();
@@ -196,4 +202,4 @@ export function initState() {
 
 export function getState() {
   return state;
-  }
+}
