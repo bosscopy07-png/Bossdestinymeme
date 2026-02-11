@@ -261,11 +261,30 @@ class TelegramHandlers {
         return ctx.reply("⛔ You are not an admin.");
 
       const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback("📢 Broadcast", "ADMIN_BROADCAST")],
-        [Markup.button.callback("📊 Stats", "ADMIN_STATS")],
-        [Markup.button.callback("🔄 Restart Bot", "ADMIN_RESTART")],
-        [Markup.button.callback("👥 User List", "ADMIN_USERS")],
-      ]);
+        // Trading controls
+      [
+        Markup.button.callback("⛔ Halt Trading", "ADMIN_HALT"),
+        Markup.button.callback("▶️ Resume Trading", "ADMIN_RESUME")
+      ],
+      // Scanning / signaling
+      [
+        Markup.button.callback("⏸️ Pause Scan", "ADMIN_PAUSE_SCAN"),
+        Markup.button.callback("▶️ Resume Scan", "ADMIN_RESUME_SCAN")
+      ],
+      [
+        Markup.button.callback("⛔ Pause Signals", "ADMIN_PAUSE_SIGNALS")
+      ],
+      // Info / misc
+      [
+        Markup.button.callback("📊 Stats", "ADMIN_STATS"),
+        Markup.button.callback("📢 Broadcast", "ADMIN_BROADCAST")
+      ],
+      [
+        Markup.button.callback("🔄 Restart Bot", "ADMIN_RESTART"),
+        Markup.button.callback("👥 User List", "ADMIN_USERS")
+      ]
+    ]);
+      
 
       await ctx.reply("🛠 *Admin Panel*", {
         parse_mode: "Markdown",
