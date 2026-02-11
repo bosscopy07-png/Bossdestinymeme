@@ -1,3 +1,4 @@
+
 /**
  * FILE: signals/processor.js
  *
@@ -11,13 +12,12 @@
 
 import Pino from "pino";
 import { ethers } from "ethers";
-import axios from "axios";
 import config from "../config/index.js";
 import * as dsUtils from "../utils/dexscreener.js";
 import { getProvider, withRetries } from "../utils/web3.js";
 import { notifyTelegram } from "../telegram/sender.js";
 import { passesGuards } from "../core/guards.js";
-import state from "../core/state.js";
+import { getState } from "../core/state.js";
 import { logInfo } from "../utils/logs.js";
 
 const log = Pino({ level: config.LOG_LEVEL || "info" });
@@ -45,18 +45,14 @@ function riskFromScore(score) {
 ========================= */
 function basicBytecodeFlags(bytecode = "") {
   if (!bytecode || bytecode === "0x") return ["no_bytecode"];
-
   const flags = [];
   const suspects = [
     "mint","burn","blacklist","whitelist","settax","setfee","maxtx","maxwallet",
     "renounce","owner","onlyowner","lock","unlock","pause","swapandliquify",
     "sniper","antibot","trading","transferownership","isexcludedfromfee"
   ];
-
   const b = bytecode.toLowerCase();
-  for (const s of suspects) {
-    if (b.includes(s)) flags.push(`bytecode_${s}`);
-  }
+  for (const s of suspects) if (b.includes(s)) flags.push(`bytecode_${s}`);
   return flags;
 }
 
@@ -66,7 +62,6 @@ function basicBytecodeFlags(bytecode = "") {
 async function honeypotHeuristic(dexData, provider, tokenAddress) {
   const flags = [];
   const details = {};
-
   try {
     const liquidityUSD = toNumberSafe(dexData.liquidity?.usd ?? dexData.liquidity);
     const holders = toNumberSafe(dexData.holders ?? dexData.holderCount);
@@ -84,10 +79,8 @@ async function honeypotHeuristic(dexData, provider, tokenAddress) {
 
     if (liquidityUSD < minLiqUsd) flags.push("low_liquidity_usd");
     if (holders < (config.ANTIRUG?.MIN_HOLDERS ?? 20)) flags.push("low_holders");
-    if (
-      buyTax > (config.ANTIRUG?.HIGH_TAX_THRESHOLD_PERCENT ?? 25) ||
-      sellTax > (config.ANTIRUG?.HIGH_TAX_THRESHOLD_PERCENT ?? 25)
-    ) {
+    if (buyTax > (config.ANTIRUG?.HIGH_TAX_THRESHOLD_PERCENT ?? 25) ||
+        sellTax > (config.ANTIRUG?.HIGH_TAX_THRESHOLD_PERCENT ?? 25)) {
       flags.push("high_tax");
     }
 
@@ -123,8 +116,8 @@ export async function analyzeToken(tokenAddress, dsRaw = {}) {
   }
 
   const provider = getProvider();
-
   let dsData = dsRaw;
+
   if (!Object.keys(dsData).length) {
     dsData =
       dsUtils.getCached?.(tokenAddress) ??
@@ -181,19 +174,22 @@ export async function analyzeToken(tokenAddress, dsRaw = {}) {
 }
 
 /* =========================
-   SIGNAL EMITTER (FIXED)
+   SIGNAL EMITTER
 ========================= */
 export function processSignal(signal) {
   if (!signal) return;
 
-  // Dedup protection
-  if (state.activeSignals.has(signal.token)) return;
+  const state = getState();
 
-  // Guard + score filter
+  // Only process if signaling enabled
+  if (!state.control?.signaling) return;
+
+  // Guarded token filter
   if (!passesGuards(signal.token)) return;
-  if (signal.score < (config.SNIPER?.MIN_SCORE ?? 40)) return;
 
-  state.addSignal(signal);
+  state.stats.signaled = (state.stats.signaled || 0) + 1;
+
+  // Send signal to Telegram
   notifyTelegram(signal);
 }
 
@@ -204,4 +200,4 @@ export function initSignalProcessor() {
   logInfo("🧠 Signal processor initialized");
 }
 
-export default { analyzeToken, processSignal };
+export default { analyzeToken, processSignal, initSignalProcessor };
