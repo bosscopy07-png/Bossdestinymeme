@@ -1,33 +1,33 @@
 // trader/paperTrader.js
-// High-fidelity paper trading engine (ESM)
-// Tracks positions, PnL, balance, realistic slippage + fee model
+// High-fidelity persistent paper trading engine
 
 import fs from "fs/promises";
 import path from "path";
 import crypto from "crypto";
-import { fileURLToPath } from "url";
 import { logInfo, logWarn, logError } from "../utils/logs.js";
-import { formatCurrency } from "../utils/format.js";
 import config from "../config/index.js";
 
-// --- Resolve project root safely in ESM ---
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_FILE = path.join(process.cwd(), "pnl.json");
+const DB_FILE = path.join(process.cwd(), "paper_pnl.json");
 
-// --- Default DB structure ---
-const DEFAULT_DB = Object.freeze({
+/* ======================================================
+   DEFAULT DB
+====================================================== */
+const DEFAULT_DB = {
+  balanceUsd: 1000,
+  positions: {}, // token => { tokens, avgEntry }
   trades: [],
-  positions: [],
-  balanceUsd: 1000
-});
+  stats: {
+    wins: 0,
+    losses: 0
+  }
+};
 
-// -------------------------
-// Load / Save Database
-// -------------------------
+/* ======================================================
+   DB HELPERS (ATOMIC)
+====================================================== */
 async function loadDB() {
   try {
-    const raw = await fs.readFile(DB_FILE, "utf8");
-    return JSON.parse(raw);
+    return JSON.parse(await fs.readFile(DB_FILE, "utf8"));
   } catch {
     return structuredClone(DEFAULT_DB);
   }
@@ -35,145 +35,152 @@ async function loadDB() {
 
 async function saveDB(db) {
   const tmp = DB_FILE + ".tmp";
-  await fs.writeFile(tmp, JSON.stringify(db, null, 2), "utf8");
+  await fs.writeFile(tmp, JSON.stringify(db, null, 2));
   await fs.rename(tmp, DB_FILE);
 }
 
-// -------------------------
-// Helpers
-// -------------------------
-export async function getWalletUsd() {
-  const db = await loadDB();
-  return Number(db.balanceUsd || 0);
-}
-
-function genID(prefix = "paper") {
+/* ======================================================
+   UTIL
+====================================================== */
+function id(prefix) {
   return `${prefix}_${crypto.randomUUID()}`;
 }
 
-function applySlippage(price, percent) {
-  return price * (1 + percent / 100);
+function applySlippage(price, percent, side) {
+  const p = percent / 100;
+  return side === "buy" ? price * (1 + p) : price * (1 - p);
 }
 
-// -------------------------
-// BUY
-// -------------------------
-export async function buy(tokenAddress, opts = {}) {
+/* ======================================================
+   BUY
+====================================================== */
+export async function paperBuy({ token, priceUsd }) {
   const db = await loadDB();
-  const wallet = db.balanceUsd;
 
-  const usdAmount =
-    Number(opts.usdAmount) ||
-    Number(((config.DEFAULT_BUY_PERCENT || 1) / 100) * wallet) ||
-    1;
+  const riskPct = config.PAPER_RISK_PERCENT ?? 5;
+  const usdAmount = (db.balanceUsd * riskPct) / 100;
 
-  if (usdAmount > wallet) throw new Error("PaperTrade: insufficient balance");
+  if (usdAmount < 1) {
+    logWarn("Paper buy skipped: too small balance");
+    return;
+  }
 
-  const slippage = Number(opts.maxSlippagePercent ?? config.MAX_SLIPPAGE) || 1;
-
-  const rawPrice = Number(opts.estimatedPriceUsd ?? 0.01);
-  const execPrice = applySlippage(rawPrice, slippage);
+  const execPrice = applySlippage(
+    priceUsd,
+    config.MAX_SLIPPAGE ?? 1,
+    "buy"
+  );
 
   const tokens = usdAmount / execPrice;
 
-  const trade = {
-    id: genID("buy"),
-    side: "buy",
-    token: tokenAddress,
-    usd: usdAmount,
-    priceUsd: execPrice,
-    tokens,
-    slippagePercent: slippage,
-    timestamp: Date.now()
-  };
+  db.balanceUsd -= usdAmount;
 
-  // Store position
-  db.positions.push({
-    id: trade.id,
-    token: tokenAddress,
+  const pos = db.positions[token] || { tokens: 0, avgEntry: 0 };
+  const totalValue =
+    pos.tokens * pos.avgEntry + tokens * execPrice;
+
+  pos.tokens += tokens;
+  pos.avgEntry = totalValue / pos.tokens;
+
+  db.positions[token] = pos;
+
+  db.trades.push({
+    id: id("buy"),
+    side: "buy",
+    token,
+    usd: usdAmount,
+    price: execPrice,
     tokens,
-    entryPrice: execPrice,
-    usdInvested: usdAmount,
-    timestamp: trade.timestamp
+    time: Date.now()
   });
 
-  db.trades.push(trade);
-  db.balanceUsd = Number((wallet - usdAmount).toFixed(6));
-
   await saveDB(db);
-  logInfo(`📈 PAPER BUY → ${tokenAddress} | $${usdAmount} @ $${execPrice.toFixed(6)}`);
 
-  return trade;
+  logInfo(`📘 PAPER BUY ${token} $${usdAmount.toFixed(2)}`);
 }
 
-// -------------------------
-// SELL
-// -------------------------
-export async function sell(tokenAddress, opts = {}) {
+/* ======================================================
+   SELL (TP / SL)
+====================================================== */
+export async function paperSell({ token, priceUsd, reason }) {
   const db = await loadDB();
+  const pos = db.positions[token];
+  if (!pos) return;
 
-  // Merge multi-positions into one synthetic position
-  const positions = db.positions.filter(
-    p => p.token.toLowerCase() === tokenAddress.toLowerCase()
+  const execPrice = applySlippage(
+    priceUsd,
+    config.MAX_SLIPPAGE ?? 1,
+    "sell"
   );
 
-  if (positions.length === 0) throw new Error("No position to sell");
+  const usdOut = pos.tokens * execPrice;
+  const pnl = usdOut - pos.tokens * pos.avgEntry;
 
-  const totalTokens = positions.reduce((a, p) => a + Number(p.tokens), 0);
+  db.balanceUsd += usdOut;
+  delete db.positions[token];
 
-  const sellTokens = Number(opts.amountTokens ?? totalTokens);
-  if (sellTokens > totalTokens) throw new Error("Sell amount exceeds holdings");
+  pnl > 0 ? db.stats.wins++ : db.stats.losses++;
 
-  const avgEntryPrice =
-    positions.reduce((a, p) => a + p.entryPrice * p.tokens, 0) / totalTokens;
-
-  const estPrice = Number(opts.estimatedPriceUsd ?? avgEntryPrice);
-
-  const slippage = Number(opts.slippagePercent ?? config.MAX_SLIPPAGE) || 1;
-  const execPrice = estPrice * (1 - slippage / 100);
-
-  const usdOut = sellTokens * execPrice;
-
-  // Remove all old positions & create new one if partial remains
-  db.positions = db.positions.filter(p => p.token !== tokenAddress);
-
-  const remaining = totalTokens - sellTokens;
-  if (remaining > 0) {
-    db.positions.push({
-      id: genID("pos"),
-      token: tokenAddress,
-      tokens: remaining,
-      entryPrice: avgEntryPrice,
-      usdInvested: remaining * avgEntryPrice,
-      timestamp: Date.now()
-    });
-  }
-
-  const trade = {
-    id: genID("sell"),
+  db.trades.push({
+    id: id("sell"),
     side: "sell",
-    token: tokenAddress,
-    tokens: sellTokens,
-    priceUsd: execPrice,
+    token,
     usd: usdOut,
-    slippagePercent: slippage,
-    pnlUsd: usdOut - sellTokens * avgEntryPrice,
-    timestamp: Date.now()
-  };
-
-  db.trades.push(trade);
-  db.balanceUsd = Number((db.balanceUsd + usdOut).toFixed(6));
+    price: execPrice,
+    pnl,
+    reason,
+    time: Date.now()
+  });
 
   await saveDB(db);
 
   logInfo(
-    `📉 PAPER SELL → ${tokenAddress} | OUT: $${usdOut.toFixed(
-      4
-    )} | PnL: $${trade.pnlUsd.toFixed(4)}`
+    `📕 PAPER SELL ${token} PnL: $${pnl.toFixed(2)} (${reason})`
   );
-
-  return trade;
 }
 
-// -------------------------
-export default { buy, sell, getWalletUsd };
+/* ======================================================
+   MONITOR ENGINE
+====================================================== */
+export async function evaluatePaperPosition({
+  token,
+  currentPrice
+}) {
+  const db = await loadDB();
+  const pos = db.positions[token];
+  if (!pos) return;
+
+  const change =
+    (currentPrice - pos.avgEntry) / pos.avgEntry;
+
+  if (change >= 0.3) {
+    await paperSell({ token, priceUsd: currentPrice, reason: "TP" });
+  }
+
+  if (change <= -0.2) {
+    await paperSell({ token, priceUsd: currentPrice, reason: "SL" });
+  }
+}
+
+/* ======================================================
+   READ API
+====================================================== */
+export async function getPaperSummary() {
+  const db = await loadDB();
+  return {
+    balance: db.balanceUsd,
+    openPositions: Object.keys(db.positions).length,
+    trades: db.trades.length,
+    winRate:
+      db.trades.length === 0
+        ? 0
+        : (db.stats.wins / db.trades.length) * 100
+  };
+}
+
+export default {
+  paperBuy,
+  paperSell,
+  evaluatePaperPosition,
+  getPaperSummary
+};
