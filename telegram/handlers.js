@@ -1,4 +1,3 @@
-// FILE: telegram/handlers.js
 import ui from "./ui.js";
 import sender from "./sender.js";
 import config from "../config/index.js";
@@ -6,27 +5,28 @@ import { logInfo, logError, logWarn } from "../utils/logs.js";
 import presets from "../trader/presets.js";
 import router from "../trader/router.js";
 import { Markup } from "telegraf";
+import { getState } from "../core/state.js";
+import paperTrader from "../trader/paperTrader.js";
 
 class TelegramHandlers {
   constructor(bot) {
     this.bot = bot;
+    this.admins = [String(config.ADMIN_CHAT_ID)];
   }
 
   /* ===============================
-      INIT
+      INIT HANDLERS
   =============================== */
   init() {
     this.bot.start((ctx) => this.start(ctx));
     this.bot.on("text", (ctx) => this.textHandler(ctx));
     this.bot.on("callback_query", (ctx) => this.handleCallback(ctx));
-
     this.handleAdminCommands(this.bot);
-
     logInfo("Telegram Handlers: READY");
   }
 
   /* ===============================
-      SAFE SEND WRAPPER
+      SAFE SEND
   =============================== */
   async send(chatId, text, extra = {}) {
     try {
@@ -34,8 +34,8 @@ class TelegramHandlers {
         parse_mode: "MarkdownV2",
         ...extra,
       });
-    } catch (e) {
-      logError("Send Error", e);
+    } catch (err) {
+      logError("Send Error", err);
     }
   }
 
@@ -43,26 +43,32 @@ class TelegramHandlers {
       START
   =============================== */
   async start(ctx) {
-    try {
-      await this.send(ctx.chat.id, ui.startMessage(), ui.startKeyboard());
-      logInfo(`User Started Bot: ${ctx.chat.id}`);
-    } catch (e) {
-      logError("Start Handler Error", e);
-    }
+    await this.send(ctx.chat.id, ui.startMessage(), ui.startKeyboard());
+    logInfo(`User started bot: ${ctx.chat.id}`);
   }
 
   /* ===============================
-      CALLBACK HANDLER
+      TEXT HANDLER
+  =============================== */
+  async textHandler(ctx) {
+    const text = ctx.message.text.trim();
+    const chatId = ctx.chat.id;
+
+    if (text.startsWith("/")) return;
+    if (text.startsWith("$")) {
+      return this.handleWatch(chatId, text.substring(1));
+    }
+
+    await this.send(chatId, "❓ *Unknown message*\nSend `$TOKEN` to watch a pair.");
+  }
+
+  /* ===============================
+      CALLBACK ROUTING
   =============================== */
   async handleCallback(ctx) {
     const chatId = ctx.chat?.id;
     const data = ctx.update?.callback_query?.data;
-
     if (!chatId || !data) return;
-
-    logInfo(`Callback => ${data}`);
-
-    try { await ctx.answerCbQuery("Processing..."); } catch {}
 
     if (!ctx.session) ctx.session = {};
     if (ctx.session.busy) return ctx.answerCbQuery("⏳ Please wait...");
@@ -70,106 +76,54 @@ class TelegramHandlers {
     setTimeout(() => (ctx.session.busy = false), 2500);
 
     try {
-      /* ============================
-           MAIN UI BUTTONS
-      ============================ */
+      await ctx.answerCbQuery("Processing...");
 
-      if (data === "ADMIN_DASHBOARD")
-        return this.send(chatId, "📊 *Dashboard*", ui.homeMenu());
+      const handlerMap = {
+        // --- MAIN UI ---
+        "ADMIN_DASHBOARD": () => this.send(chatId, "📊 *Dashboard*", ui.homeMenu()),
+        "START_SCANNER": () => this.toggleScanner(chatId, true),
+        "STOP_SCANNER": () => this.toggleScanner(chatId, false),
+        "TRADING_MENU": () => this.send(chatId, "💹 *Trading Mode*", ui.tradingMenu()),
+        "SETTINGS_MENU": () => this.send(chatId, "⚙️ *Settings*", ui.settingsMenu()),
+        "VIEW_LOGS": () => this.send(chatId, "📨 *Fetching Logs...*\nComing soon..."),
 
-      if (data === "START_SCANNER")
-        return this.send(chatId, "🟢 *Scanner Started*");
+        // --- TRADING ---
+        "ENABLE_LIVE": () => this.setTradingMode(chatId, "live"),
+        "ENABLE_PAPER": () => this.setTradingMode(chatId, "paper"),
 
-      if (data === "STOP_SCANNER")
-        return this.send(chatId, "🔴 *Scanner Stopped*");
+        // --- SETTINGS ---
+        "REFRESH_RPCS": () => this.send(chatId, "🔁 *Refreshing RPC endpoints...*"),
+        "ANTI_RUG_SETTINGS": () => this.send(chatId, "🛡 *Anti-rug settings coming soon...*"),
 
-      if (data === "TRADING_MENU")
-        return this.send(chatId, "💹 *Trading Mode*", ui.tradingMenu());
+        // --- SNIPER ---
+        "OPEN_SNIPER": () => this.openSniper(chatId),
+        "SNIPER_STATUS": () => this.send(chatId, "🎯 *Sniper Status*\nRunning: No\nLast trade: None\nErrors: 0"),
 
-      if (data === "SETTINGS_MENU")
-        return this.send(chatId, "⚙️ *Settings*", ui.settingsMenu());
+        // --- PNL / SIGNALS ---
+        "PNL_MENU": () => this.send(chatId, "📈 *PNL Dashboard*\nStats loading soon..."),
+        "SIGNALS_MENU": () => this.send(chatId, "📡 *Signals Panel*\nSignals will appear here"),
+        "DEV_CHECK_MENU": () => this.send(chatId, "🧪 *Developer Diagnostics*\nComing soon..."),
+      };
 
-      if (data === "VIEW_LOGS")
-        return this.send(chatId, "📨 *Fetching Logs...*\n(Coming soon)");
-
-      /* ============================
-           TRADING
-      ============================ */
-
-      if (data === "ENABLE_LIVE")
-        return this.send(chatId, "🟢 *Live trading enabled*");
-
-      if (data === "ENABLE_PAPER")
-        return this.send(chatId, "🧪 *Paper mode enabled*");
-
-      /* ============================
-           SETTINGS
-      ============================ */
-
-      if (data === "REFRESH_RPCS")
-        return this.send(chatId, "🔁 *Refreshing RPC endpoints...*");
-
-      if (data === "ANTI_RUG_SETTINGS")
-        return this.send(chatId, "🛡 *Anti-rug settings coming soon...*");
-
-      /* ============================
-           TOKEN ACTIONS
-      ============================ */
-
-      if (data.startsWith("snipe_"))
-        return this.handleBuy(chatId, data.replace("snipe_", ""));
-
-      if (data.startsWith("watch_"))
-        return this.handleWatch(chatId, data.replace("watch_", ""));
-
-      if (data.startsWith("ignore_"))
-        return this.send(chatId, "❌ Ignored.");
-
-      /* ============================
-           OLD COMPATIBILITY
-      ============================ */
-
-      if (data.startsWith("BUY_"))
-        return this.handleBuy(chatId, data.slice(4));
-
-      if (data.startsWith("WATCH_"))
-        return this.handleWatch(chatId, data.slice(6));
-
-      if (data.startsWith("DETAILS_"))
-        return this.handleDetails(chatId, data.slice(8));
-
-      if (data === "OPEN_SNIPER")
-        return this.openSniper(chatId);
-
-      if (data.startsWith("SNIPER_PRESET_"))
-        return this.sniperPreset(chatId, data.replace("SNIPER_PRESET_", ""));
-
-      /* ============================
-           NEWLY MERGED MENUS
-      ============================ */
-
-      if (data === "DEV_CHECK_MENU") {
-        return this.send(chatId, "🧪 *Developer Diagnostics*\nComing soon...");
+      // --- TOKEN ACTIONS ---
+      if (data.startsWith("snipe_") || data.startsWith("BUY_")) {
+        return this.handleBuy(chatId, data.replace(/^(snipe_|BUY_)/, ""));
       }
 
-      if (data === "SNIPER_STATUS") {
-        return this.send(
-          chatId,
-          "🎯 *Sniper Status*\n• Running: No\n• Last trade: None\n• Errors: 0\n\n(Full module coming soon)"
-        );
+      if (data.startsWith("watch_") || data.startsWith("WATCH_")) {
+        return this.handleWatch(chatId, data.replace(/^(watch_|WATCH_)/, ""));
       }
 
-      if (data === "PNL_MENU") {
-        return this.send(chatId, "📈 *PNL Dashboard*\nStats loading soon...");
-      }
+      if (data.startsWith("ignore_")) return this.send(chatId, "❌ Ignored.");
 
-      if (data === "SIGNALS_MENU") {
-        return this.send(chatId, "📡 *Signals Panel*\nSignals will appear here.");
-      }
+      if (data.startsWith("DETAILS_")) return this.handleDetails(chatId, data.replace("DETAILS_", ""));
+      if (data.startsWith("SNIPER_PRESET_")) return this.sniperPreset(chatId, data.replace("SNIPER_PRESET_", ""));
 
-      /* ============================
-           UNKNOWN FALLBACK
-      ============================ */
+      // --- ADMIN ---
+      if (data.startsWith("ADMIN_")) return this.handleAdminCallback(ctx, data);
+
+      // --- DEFAULT ---
+      if (handlerMap[data]) return handlerMap[data]();
 
       logWarn(`Unknown callback: ${data}`);
       return this.send(chatId, `⚠️ Unknown action: \`${data}\``);
@@ -181,63 +135,31 @@ class TelegramHandlers {
   }
 
   /* ===============================
-      TEXT HANDLER
+      BUY / WATCH / DETAILS
   =============================== */
-  async textHandler(ctx) {
-    const chatId = ctx.chat.id;
-    const text = ctx.message.text.trim();
-
-    if (text.startsWith("/")) return;
-
-    if (text.startsWith("$")) {
-      const symbol = text.substring(1);
-      return this.handleWatch(chatId, symbol);
-    }
-
-    return this.send(chatId, "❓ *Unknown message*\nSend `$TOKEN` to watch a pair.");
-  }
-
-  /* ===============================
-      BUY
-  =============================== */
-  async handleBuy(chatId, pair) {
+  async handleBuy(chatId, token) {
     try {
-      await this.send(chatId, `🔫 *Sniping* \`${pair}\``);
-
-      const result = await router.executeSniper(pair);
-
+      await this.send(chatId, `🔫 *Sniping* \`${token}\``);
+      const result = await router.executeSniper(token);
       await this.send(
         chatId,
         result?.success
-          ? `✅ *Buy executed for* \`${pair}\``
-          : `❌ Failed to buy \`${pair}\`\n${result?.error || "Unknown error"}`
+          ? `✅ *Buy executed for* \`${token}\``
+          : `❌ Failed to buy \`${token}\`\n${result?.error || "Unknown"}`
       );
-    } catch (e) {
-      logError("Buy Handler Error", e);
+    } catch (err) {
+      logError("Buy Handler Error", err);
     }
   }
 
-  /* ===============================
-      WATCH
-  =============================== */
-  async handleWatch(chatId, symbol) {
-    try {
-      await this.send(chatId, `👁 *Watching:* \`${symbol}\``);
-    } catch (e) {
-      logError("Watch Error", e);
-    }
+  async handleWatch(chatId, token) {
+    await this.send(chatId, `👁 *Watching:* \`${token}\``);
   }
 
-  /* ===============================
-      DETAILS
-  =============================== */
-  async handleDetails(chatId, pair) {
-    await this.send(chatId, `📊 *Fetching details for:* \`${pair}\``);
+  async handleDetails(chatId, token) {
+    await this.send(chatId, `📊 *Fetching details for:* \`${token}\``);
   }
 
-  /* ===============================
-      SNIPER UI
-  =============================== */
   async openSniper(chatId) {
     return this.send(chatId, ui.sniperMenu(), ui.sniperKeyboard());
   }
@@ -245,7 +167,6 @@ class TelegramHandlers {
   async sniperPreset(chatId, presetId) {
     const preset = presets[presetId];
     if (!preset) return this.send(chatId, "❌ Invalid preset");
-
     return this.send(
       chatId,
       `🎯 *Preset Loaded:* ${presetId}\nSlippage: ${preset.slippage}\nGas: ${preset.gas}`
@@ -253,43 +174,88 @@ class TelegramHandlers {
   }
 
   /* ===============================
-      ADMIN COMMANDS
+      TRADING ACTIONS
+  =============================== */
+  async toggleScanner(chatId, enable) {
+    const state = getState();
+    state.scannerRunning = enable;
+    await this.send(chatId, enable ? "🟢 *Scanner Started*" : "🔴 *Scanner Stopped*");
+  }
+
+  async setTradingMode(chatId, mode) {
+    const state = getState();
+    if (!["live","paper"].includes(mode)) return;
+    state.tradingMode = mode;
+    await this.send(chatId, mode === "live" ? "🟢 *Live trading enabled*" : "🧪 *Paper mode enabled*");
+  }
+
+  /* ===============================
+      ADMIN CALLBACKS
+  =============================== */
+  async handleAdminCallback(ctx, data) {
+    const chatId = ctx.chat.id;
+    const state = getState();
+    if (!this.admins.includes(String(ctx.from.id))) {
+      return ctx.answerCbQuery("⛔ You are not an admin.");
+    }
+
+    switch(data) {
+      case "ADMIN_HALT":
+        state.tradingEnabled = false;
+        await this.send(chatId, "⛔ *Trading halted*");
+        break;
+      case "ADMIN_RESUME":
+        state.tradingEnabled = true;
+        await this.send(chatId, "▶️ *Trading resumed*");
+        break;
+      case "ADMIN_PAUSE_SCAN":
+        state.scannerRunning = false;
+        await this.send(chatId, "⏸️ *Scan paused*");
+        break;
+      case "ADMIN_RESUME_SCAN":
+        state.scannerRunning = true;
+        await this.send(chatId, "▶️ *Scan resumed*");
+        break;
+      case "ADMIN_PAUSE_SIGNALS":
+        state.signalingEnabled = false;
+        await this.send(chatId, "⏸️ *Signals paused*");
+        break;
+      case "ADMIN_STATS":
+        const stats = state.getStats();
+        await this.send(chatId, `📊 *Stats*\nScanned: ${stats.scanned}\nSignaled: ${stats.signaled}\nSent: ${stats.sent}`);
+        break;
+      case "ADMIN_BROADCAST":
+        await this.send(chatId, "📢 *Broadcasting...* (Coming soon)");
+        break;
+      case "ADMIN_RESTART":
+        await this.send(chatId, "🔄 *Restarting bot...* (Requires manual restart)");
+        break;
+      case "ADMIN_USERS":
+        await this.send(chatId, "👥 *User list*\nComing soon...");
+        break;
+      default:
+        await this.send(chatId, `⚠️ Unknown admin action: \`${data}\``);
+    }
+  }
+
+  /* ===============================
+      ADMIN COMMAND REGISTRATION
   =============================== */
   handleAdminCommands(bot) {
     bot.command("admin", async (ctx) => {
-      if (String(ctx.from.id) !== String(config.ADMIN_CHAT_ID))
+      if (!this.admins.includes(String(ctx.from.id))) {
         return ctx.reply("⛔ You are not an admin.");
+      }
 
       const keyboard = Markup.inlineKeyboard([
-        // Trading controls
-      [
-        Markup.button.callback("⛔ Halt Trading", "ADMIN_HALT"),
-        Markup.button.callback("▶️ Resume Trading", "ADMIN_RESUME")
-      ],
-      // Scanning / signaling
-      [
-        Markup.button.callback("⏸️ Pause Scan", "ADMIN_PAUSE_SCAN"),
-        Markup.button.callback("▶️ Resume Scan", "ADMIN_RESUME_SCAN")
-      ],
-      [
-        Markup.button.callback("⛔ Pause Signals", "ADMIN_PAUSE_SIGNALS")
-      ],
-      // Info / misc
-      [
-        Markup.button.callback("📊 Stats", "ADMIN_STATS"),
-        Markup.button.callback("📢 Broadcast", "ADMIN_BROADCAST")
-      ],
-      [
-        Markup.button.callback("🔄 Restart Bot", "ADMIN_RESTART"),
-        Markup.button.callback("👥 User List", "ADMIN_USERS")
-      ]
-    ]);
-      
+        [Markup.button.callback("⛔ Halt Trading","ADMIN_HALT"), Markup.button.callback("▶️ Resume Trading","ADMIN_RESUME")],
+        [Markup.button.callback("⏸️ Pause Scan","ADMIN_PAUSE_SCAN"), Markup.button.callback("▶️ Resume Scan","ADMIN_RESUME_SCAN")],
+        [Markup.button.callback("⛔ Pause Signals","ADMIN_PAUSE_SIGNALS")],
+        [Markup.button.callback("📊 Stats","ADMIN_STATS"), Markup.button.callback("📢 Broadcast","ADMIN_BROADCAST")],
+        [Markup.button.callback("🔄 Restart Bot","ADMIN_RESTART"), Markup.button.callback("👥 User List","ADMIN_USERS")]
+      ]);
 
-      await ctx.reply("🛠 *Admin Panel*", {
-        parse_mode: "Markdown",
-        reply_markup: keyboard.reply_markup,
-      });
+      await ctx.reply("🛠 *Admin Panel*", { parse_mode: "Markdown", reply_markup: keyboard.reply_markup });
     });
   }
 }
