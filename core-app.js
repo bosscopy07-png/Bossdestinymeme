@@ -9,6 +9,8 @@ import { startGeckoScanner } from "./scanner/geckoScanner.js";
 
 import { initSignalProcessor } from "./signals/processor.js";
 
+import { monitorPaperTrades } from "./trader/paperTrader.js";
+
 // ----------------------
 // ENV VALIDATION
 // ----------------------
