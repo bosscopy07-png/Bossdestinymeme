@@ -25,7 +25,7 @@ class CoreState extends EventEmitter {
     // ----------------------------
     // MODES / CONTROL
     // ----------------------------
-    this.tradingMode = "live"; // paper | live
+    this.tradingMode = "paper"; // paper | live
     this.sniperEnabled = true;
     this.scannerRunning = true;
     this.signalingEnabled = true;
@@ -35,6 +35,15 @@ class CoreState extends EventEmitter {
     // ----------------------------
     this.activeSignals = new Map(); // address => signal
     this.watchlist = new Set();
+
+    // ----------------------------
+    // PAPER TRADING (SIMULATION)
+    // ----------------------------
+    this.paper = {
+      enabled: true,
+      balance: 1000, // virtual USDC
+      trades: [] // { address, side, amount, price, pnl, time }
+    };
 
     // ----------------------------
     // RPC
@@ -96,8 +105,21 @@ class CoreState extends EventEmitter {
   }
 
   /* ============================
-      TRADING
+      TRADING MODES
   ============================ */
+  setTradingMode(mode) {
+    if (!["paper", "live"].includes(mode)) {
+      logWarn(`Invalid trading mode: ${mode}`);
+      return;
+    }
+
+    this.tradingMode = mode;
+    this.paper.enabled = mode === "paper";
+    this.emit("mode:changed", mode);
+
+    logInfo(`💱 Trading mode set to ${mode}`);
+  }
+
   enableSniper() {
     this.sniperEnabled = true;
     this.emit("sniper:enabled");
@@ -108,16 +130,6 @@ class CoreState extends EventEmitter {
     this.sniperEnabled = false;
     this.emit("sniper:disabled");
     logInfo("🛑 Sniper DISABLED");
-  }
-
-  setTradingMode(mode) {
-    if (!["paper", "live"].includes(mode)) {
-      logWarn(`Invalid trading mode: ${mode}`);
-      return;
-    }
-    this.tradingMode = mode;
-    this.emit("mode:changed", mode);
-    logInfo(`💱 Trading mode set to ${mode}`);
   }
 
   /* ============================
@@ -147,15 +159,60 @@ class CoreState extends EventEmitter {
       WATCHLIST
   ============================ */
   addWatch(address) {
+    if (!address) return;
     this.watchlist.add(address.toLowerCase());
   }
 
   removeWatch(address) {
+    if (!address) return;
     this.watchlist.delete(address.toLowerCase());
   }
 
   isWatched(address) {
+    if (!address) return false;
     return this.watchlist.has(address.toLowerCase());
+  }
+
+  /* ============================
+      PAPER TRADING
+  ============================ */
+  enablePaper() {
+    this.paper.enabled = true;
+    this.tradingMode = "paper";
+    logInfo("🧪 Paper trading ENABLED");
+  }
+
+  disablePaper() {
+    this.paper.enabled = false;
+    logInfo("🧪 Paper trading DISABLED");
+  }
+
+  recordPaperTrade(trade) {
+    if (!this.paper.enabled) return;
+
+    this.paper.trades.push({
+      ...trade,
+      time: Date.now()
+    });
+  }
+
+  updatePaperBalance(amount) {
+    if (!this.paper.enabled) return;
+    this.paper.balance += amount;
+  }
+
+  getPaperState() {
+    return {
+      enabled: this.paper.enabled,
+      balance: this.paper.balance,
+      trades: [...this.paper.trades]
+    };
+  }
+
+  resetPaper() {
+    this.paper.balance = 1000;
+    this.paper.trades = [];
+    logInfo("♻️ Paper trading reset");
   }
 
   /* ============================
@@ -202,4 +259,4 @@ export function initState() {
 
 export function getState() {
   return state;
-}
+  }
