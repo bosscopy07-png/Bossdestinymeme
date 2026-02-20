@@ -6,6 +6,7 @@ import { logInfo, logWarn, logError } from "../utils/logs.js";
 /**
  * CORE RUNTIME KERNEL
  * Production-grade centralized state manager
+ * Singleton + Event-driven
  */
 
 class CoreState extends EventEmitter {
@@ -28,7 +29,7 @@ class CoreState extends EventEmitter {
     // =============================
     // CONTROL FLAGS
     // =============================
-    this.tradingMode = "paper"; // paper | live
+    this.tradingMode = "live"; // paper | live
     this.sniperEnabled = true;
     this.scannerRunning = true;
     this.signalingEnabled = true;
@@ -36,7 +37,7 @@ class CoreState extends EventEmitter {
     // =============================
     // RUNTIME DATA
     // =============================
-    this.activeSignals = new Map(); // address => { signal, createdAt }
+    this.activeSignals = new Map(); // address => { data, createdAt }
     this.watchlist = new Set();
 
     // =============================
@@ -46,7 +47,7 @@ class CoreState extends EventEmitter {
       enabled: true,
       balance: 1000,
       trades: [],
-      maxRiskPerTrade: 0.05 // 5% per trade cap
+      maxRiskPerTrade: 0.05
     };
 
     // =============================
@@ -70,7 +71,7 @@ class CoreState extends EventEmitter {
       errors: 0
     };
 
-    // Auto-clean expired signals every 60s
+    // Auto-clean expired signals
     setInterval(() => this.cleanupSignals(), 60_000);
   }
 
@@ -82,13 +83,22 @@ class CoreState extends EventEmitter {
     this.initialized = true;
     this.systemStatus = "running";
     logInfo("🧠 CoreState initialized & system running");
+    this.emit("system:ready");
+  }
+
+  isOperational() {
+    return this.systemStatus === "running" && !this.panicMode;
   }
 
   haltSystem(reason = "Manual halt") {
+    if (this.systemStatus === "halted") return;
+
     this.systemStatus = "halted";
     this.panicMode = true;
     this.sniperEnabled = false;
     this.scannerRunning = false;
+    this.signalingEnabled = false;
+
     logError(`🚨 SYSTEM HALTED: ${reason}`);
     this.emit("system:halted", reason);
   }
@@ -98,10 +108,6 @@ class CoreState extends EventEmitter {
     this.systemStatus = "degraded";
     logWarn(`⚠ System degraded: ${reason}`);
     this.emit("system:degraded", reason);
-  }
-
-  isOperational() {
-    return this.systemStatus === "running" && !this.panicMode;
   }
 
   /* =====================================================
@@ -117,17 +123,17 @@ class CoreState extends EventEmitter {
   }
 
   /* =====================================================
-      TRADING MODE SAFETY
+      TRADING MODE
   ===================================================== */
   setTradingMode(mode) {
     if (!["paper", "live"].includes(mode)) {
       logWarn(`Invalid trading mode: ${mode}`);
-      return;
+      return false;
     }
 
     if (mode === "live" && this.panicMode) {
-      logError("Cannot enable live trading while panicMode is active");
-      return;
+      logError("Cannot enable live trading during panic mode");
+      return false;
     }
 
     this.tradingMode = mode;
@@ -135,16 +141,17 @@ class CoreState extends EventEmitter {
 
     logInfo(`💱 Trading mode set to ${mode}`);
     this.emit("mode:changed", mode);
+    return true;
   }
 
   /* =====================================================
-      SIGNAL MANAGEMENT (WITH TTL)
+      SIGNAL MANAGEMENT
   ===================================================== */
   addSignal(signal) {
-    if (!signal?.address) return;
+    if (!signal?.address) return false;
 
     const key = signal.address.toLowerCase();
-    if (this.activeSignals.has(key)) return;
+    if (this.activeSignals.has(key)) return false;
 
     this.activeSignals.set(key, {
       data: signal,
@@ -153,6 +160,7 @@ class CoreState extends EventEmitter {
 
     this.stats.signaled++;
     this.emit("signal:new", signal);
+    return true;
   }
 
   cleanupSignals(ttlMs = 10 * 60 * 1000) {
@@ -166,21 +174,26 @@ class CoreState extends EventEmitter {
   }
 
   getSignals() {
-    return Array.from(this.activeSignals.values()).map(v => v.data);
+    return [...this.activeSignals.values()].map(v => v.data);
+  }
+
+  hasSignal(address) {
+    return this.activeSignals.has(address?.toLowerCase());
   }
 
   /* =====================================================
       PAPER TRADING ENGINE
   ===================================================== */
   recordPaperTrade({ address, side, amount, price }) {
-    if (!this.paper.enabled) return;
+    if (!this.paper.enabled) return false;
+    if (!address || !side || !amount || !price) return false;
 
     const tradeValue = amount * price;
     const maxAllowed = this.paper.balance * this.paper.maxRiskPerTrade;
 
     if (tradeValue > maxAllowed) {
-      logWarn("Paper trade exceeds max risk per trade limit");
-      return;
+      logWarn("Paper trade exceeds max risk limit");
+      return false;
     }
 
     if (side === "buy") {
@@ -195,12 +208,18 @@ class CoreState extends EventEmitter {
       time: Date.now()
     });
 
-    this.stats.buys += side === "buy" ? 1 : 0;
-    this.stats.sells += side === "sell" ? 1 : 0;
+    if (side === "buy") this.stats.buys++;
+    if (side === "sell") this.stats.sells++;
+
+    this.emit("paper:trade", { address, side, amount, price });
+    return true;
   }
 
   getPaperPnL() {
-    return this.paper.trades.length;
+    return {
+      balance: this.paper.balance,
+      trades: this.paper.trades.length
+    };
   }
 
   /* =====================================================
@@ -214,18 +233,26 @@ class CoreState extends EventEmitter {
     return Object.freeze({ ...this.stats });
   }
 
+  // 🔥 BACKWARD COMPATIBILITY (FIXES YOUR ERROR)
+  getStats() {
+    return this.getStatsSnapshot();
+  }
+
   /* =====================================================
-      HEALTH CHECK
+      HEALTH
   ===================================================== */
   getHealth() {
-    return {
+    return Object.freeze({
       uptimeMs: Date.now() - this.startedAt,
       systemStatus: this.systemStatus,
       activeSignals: this.activeSignals.size,
       watchlistSize: this.watchlist.size,
       tradingMode: this.tradingMode,
+      sniperEnabled: this.sniperEnabled,
+      scannerRunning: this.scannerRunning,
+      signalingEnabled: this.signalingEnabled,
       panicMode: this.panicMode
-    };
+    });
   }
 }
 
