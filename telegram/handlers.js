@@ -80,7 +80,7 @@ class TelegramHandlers {
 
       // --- MAIN HANDLER MAP ---
       const handlerMap = {
-        "ADMIN_DASHBOARD": () => this.send(chatId, "📊 *Dashboard*", ui.homeMenu()),
+        "ADMIN_DASHBOARD": () => this.send(chatId, "📊 *Admin*", ui.homeMenu()),
         "START_SCANNER": () => this.toggleScanner(chatId, true),
         "STOP_SCANNER": () => this.toggleScanner(chatId, false),
         "TRADING_MENU": () => this.send(chatId, "💹 *Trading Mode*", ui.tradingMenu()),
