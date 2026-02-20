@@ -18,11 +18,9 @@ export function registerAdminNotifier(fn) {
 ====================================================== */
 const SEEN_FILE = path.resolve(process.cwd(), "seen_pairs.json");
 const SEEN_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
-
 let seenPairs = new Map();
 let persistScheduled = false;
 
-/* ---------- LOAD ---------- */
 (async function loadSeen() {
   try {
     const raw = await fs.readFile(SEEN_FILE, "utf8");
@@ -39,7 +37,6 @@ let persistScheduled = false;
   }
 })();
 
-/* ---------- SAVE (BUFFERED) ---------- */
 function schedulePersist() {
   if (persistScheduled) return;
   persistScheduled = true;
@@ -90,6 +87,30 @@ export async function send(bot, chatId, payload = {}) {
 }
 
 /* ======================================================
+   UNIVERSAL SEND WITH IMAGE
+====================================================== */
+export async function sendWithImage(bot, chatId, payload = {}) {
+  try {
+    const text = escapeMarkdownV2(payload.text || "");
+    const image = payload.imageUrl;
+    const options = payload.options || {};
+
+    if (image) {
+      return await bot.telegram.sendPhoto(chatId, image, {
+        caption: text,
+        parse_mode: "MarkdownV2",
+        ...options,
+      });
+    } else {
+      return send(bot, chatId, payload);
+    }
+  } catch (err) {
+    logError("Telegram sendWithImage failed", err);
+    adminNotifier?.(`Telegram sendWithImage error: ${err.message}`);
+  }
+}
+
+/* ======================================================
    SIGNAL MESSAGE BUILDER
 ====================================================== */
 export function buildSignalMessage(signal) {
@@ -118,7 +139,7 @@ export function buildSignalMessage(signal) {
 }
 
 /* ======================================================
-   SEND TOKEN SIGNAL (IDEMPOTENT)
+   SEND TOKEN SIGNAL (IDEMPOTENT + IMAGE)
 ====================================================== */
 export async function sendTokenSignal(bot, chatId, signal) {
   try {
@@ -126,7 +147,6 @@ export async function sendTokenSignal(bot, chatId, signal) {
     if (isPairSent(signal.address, signal.chain)) return;
 
     const message = buildSignalMessage(signal);
-
     const keyboard = Markup.inlineKeyboard([
       [
         Markup.button.callback("🚀 Snipe", `BUY_${signal.address}`),
@@ -140,10 +160,10 @@ export async function sendTokenSignal(bot, chatId, signal) {
       ],
     ]);
 
-    await bot.telegram.sendMessage(chatId, message, {
-      parse_mode: "MarkdownV2",
-      disable_web_page_preview: true,
-      reply_markup: keyboard.reply_markup,
+    await sendWithImage(bot, chatId, {
+      text: message,
+      imageUrl: signal.imageUrl || config.DEFAULT_SIGNAL_IMAGE,
+      options: { reply_markup: keyboard.reply_markup },
     });
 
     markPairAsSent(signal.address, signal.chain);
@@ -157,14 +177,13 @@ export async function sendTokenSignal(bot, chatId, signal) {
 /* ======================================================
    ADMIN NOTIFICATION
 ====================================================== */
-export async function sendAdminNotification(bot, message) {
+export async function sendAdminNotification(bot, message, imageUrl) {
   if (!config.ADMIN_CHAT_ID) return;
   try {
-    await bot.telegram.sendMessage(
-      config.ADMIN_CHAT_ID,
-      escapeMarkdownV2(message),
-      { parse_mode: "MarkdownV2" }
-    );
+    await sendWithImage(bot, config.ADMIN_CHAT_ID, {
+      text: message,
+      imageUrl,
+    });
   } catch (err) {
     logError("Admin notify failed", err);
   }
@@ -175,10 +194,14 @@ export async function sendAdminNotification(bot, message) {
 ====================================================== */
 export async function notifyTelegram(bot, chatId, text) {
   return send(bot, chatId, { text });
-         }
-// At the bottom of telegram/sender.js
+}
+
+/* ======================================================
+   EXPORT OBJECT
+====================================================== */
 const sender = {
   send,
+  sendWithImage,
   sendTokenSignal,
   sendAdminNotification,
   notifyTelegram,
