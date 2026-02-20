@@ -7,18 +7,26 @@ import { logInfo, logError } from "../utils/logs.js";
 // -----------------------------------------------------------------------------
 // GLOBAL STATE
 // -----------------------------------------------------------------------------
-global.API_SIGNALS = global.API_SIGNALS || [];   // filled by generator.js
+global.API_SIGNALS = global.API_SIGNALS || []; // Populated by signal generator
+global.TRADING_ENGINE = global.TRADING_ENGINE || null; // Your trading engine instance
 
-// Resolve seen pairs file
+// -----------------------------------------------------------------------------
+// CONFIGURED FILE PATHS
+// -----------------------------------------------------------------------------
 const SEEN_PAIRS_PATH =
-  config.persistence?.seenPairsFile ||
-  path.join(process.cwd(), "seen_pairs.json");
+  config.persistence?.seenPairsFile || path.join(process.cwd(), "seen_pairs.json");
 
-// Resolve log file
 const LOG_FILE =
-  config.PATHS?.LOGS
-    ? path.join(process.cwd(), config.PATHS.LOGS, "system.log")
+  config.LOG?.directory
+    ? path.join(process.cwd(), config.LOG.directory, "system.log")
     : path.join(process.cwd(), "system.log");
+
+// -----------------------------------------------------------------------------
+// PAIRS CACHE
+// -----------------------------------------------------------------------------
+let pairsCache = [];
+let lastPairsLoad = 0;
+const PAIRS_CACHE_TTL = 5 * 1000; // 5 seconds
 
 // -----------------------------------------------------------------------------
 // SAFE JSON READER
@@ -26,25 +34,34 @@ const LOG_FILE =
 async function readJsonSafe(filePath, fallback = {}) {
   try {
     const raw = await fs.readFile(filePath, "utf8");
-
     if (!raw.trim()) return fallback;
-
     return JSON.parse(raw);
   } catch (e) {
+    logError(`Failed to read JSON file ${filePath}: ${e.message}`);
     return fallback;
   }
 }
 
 // -----------------------------------------------------------------------------
-// GET LATEST SIGNALS (from global API_SIGNALS)
+// SIGNAL VALIDATION
+// -----------------------------------------------------------------------------
+function validateSignal(signal) {
+  if (!signal || typeof signal !== "object") return false;
+  if (!signal.token || typeof signal.token !== "string") return false;
+  if (!signal.price || typeof signal.price !== "number") return false;
+  if (!signal.time || typeof signal.time !== "number") return false;
+  return true;
+}
+
+// -----------------------------------------------------------------------------
+// GET LATEST SIGNALS
 // -----------------------------------------------------------------------------
 export async function getSignals(limit = 100) {
   try {
-    const all = Array.isArray(global.API_SIGNALS)
-      ? global.API_SIGNALS
+    const validSignals = Array.isArray(global.API_SIGNALS)
+      ? global.API_SIGNALS.filter(validateSignal)
       : [];
-
-    return all.slice(0, limit);
+    return validSignals.slice(-limit).reverse(); // newest first
   } catch (err) {
     logError("getSignals error: " + err.message);
     throw new Error("failed_to_fetch_signals");
@@ -52,26 +69,26 @@ export async function getSignals(limit = 100) {
 }
 
 // -----------------------------------------------------------------------------
-// GET SEEN PAIRS (normalize any format → array)
+// GET SEEN PAIRS WITH CACHE
 // -----------------------------------------------------------------------------
 export async function getPairs() {
   try {
+    const now = Date.now();
+    if (pairsCache.length && now - lastPairsLoad < PAIRS_CACHE_TTL) {
+      return pairsCache;
+    }
+
     const data = await readJsonSafe(SEEN_PAIRS_PATH, {});
 
-    if (Array.isArray(data)) {
-      // Already proper format
-      return data;
-    }
+    let normalized = [];
+    if (Array.isArray(data)) normalized = data;
+    else if (typeof data === "object")
+      normalized = Object.entries(data).map(([pair, ts]) => ({ pair, firstSeen: ts }));
 
-    if (typeof data === "object") {
-      // Convert map form → array
-      return Object.entries(data).map(([pair, ts]) => ({
-        pair,
-        firstSeen: ts,
-      }));
-    }
+    pairsCache = normalized;
+    lastPairsLoad = now;
 
-    return [];
+    return normalized;
   } catch (err) {
     logError("getPairs error: " + err.message);
     throw new Error("failed_to_fetch_pairs");
@@ -79,51 +96,46 @@ export async function getPairs() {
 }
 
 // -----------------------------------------------------------------------------
-// GET SNIPER STATUS (runtime + config snapshot)
+// GET SNIPER STATUS (INCLUDES ENGINE STATE & RECENT SIGNALS)
 // -----------------------------------------------------------------------------
-export async function getSniperStatus() {
+export async function getSniperStatus(apiKey = null) {
   try {
+    // Optional API key check
+    if (config.API?.KEY && config.API.KEY !== apiKey) {
+      throw new Error("unauthorized");
+    }
+
+    const engineStatus = global.TRADING_ENGINE?.getStatus?.() || {};
+
     return {
-      liveMode:
-        config.LIVE_MODE === true ||
-        process.env.LIVE_MODE === "true",
-
-      paperMode:
-        config.PAPER_MODE !== false &&
-        process.env.PAPER_MODE !== "false",
-
+      liveMode: config.LIVE_MODE === true,
+      paperMode: config.PAPER_MODE === true,
       presets: config.presets || {},
-
-      // Light snapshot of recent activity
-      recentSignals: (global.API_SIGNALS || []).slice(0, 10),
+      recentSignals: (global.API_SIGNALS || []).slice(-10).reverse(),
+      engine: engineStatus,
     };
   } catch (err) {
     logError("getSniperStatus error: " + err.message);
-    throw new Error("failed_to_fetch_status");
+    throw new Error(err.message || "failed_to_fetch_status");
   }
 }
 
 // -----------------------------------------------------------------------------
-// GET LAST N LINES OF LOG FILE (extreme performance-safe)
+// GET LAST N LINES OF LOG FILE
 // -----------------------------------------------------------------------------
-export async function getLogs(lines = 200) {
+export async function getLogs(lines = 200, apiKey = null) {
   try {
-    const raw = await fs.readFile(LOG_FILE, "utf8");
+    if (config.API?.KEY && config.API.KEY !== apiKey) {
+      throw new Error("unauthorized");
+    }
 
+    const raw = await fs.readFile(LOG_FILE, "utf8");
     if (!raw.trim()) return ["<empty log file>"];
 
     const parts = raw.split("\n");
-
-    // Avoid memory explosion for huge logs
-    if (parts.length > lines) {
-      return parts.slice(parts.length - lines);
-    }
-
-    return parts;
+    return parts.length > lines ? parts.slice(parts.length - lines) : parts;
   } catch (err) {
-    return [
-      `Log file unavailable: ${LOG_FILE}`,
-      `Reason: ${err.message}`,
-    ];
+    logError("getLogs error: " + err.message);
+    return [`Log file unavailable: ${LOG_FILE}`, `Reason: ${err.message}`];
   }
-}
+  }
