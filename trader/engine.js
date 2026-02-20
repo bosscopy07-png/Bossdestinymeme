@@ -1,115 +1,199 @@
 /**
  * FILE: /trader/engine.js
  *
- * Hyper Beast Trading Engine
- * - Unified ESM trading engine for memecoin bot
- * - Handles signal processing, trade execution, risk management
- * - Integrates Telegram alerts, RPC rotation, and logging
+ * Hyper Beast Trading Engine v2 (Production Grade)
  */
 
 import Pino from "pino";
 import config from "../config/index.js";
 import { getWeb3, rotateRPC } from "../core/rpcManager.js";
-import { canTrade, recordLoss, getTradingStatus } from "../core/tradingGuard.js";
-import { buildTelegramMessage } from "../signals/generator.js";
-import { processSignalCandidate } from "../signals/generator.js";
-import { sendAdminNotification } from "../telegram/sender.js";
-
-// Optional: replace with real exchange adapter
+import {
+  canTrade,
+  recordLoss,
+  recordWin,
+  getTradingStatus
+} from "../core/tradingGuard.js";
+import { buildTelegramMessage, processSignalCandidate } from "../signals/generator.js";
 import { placeBuyOrder, placeSellOrder, checkBalance } from "./exchange.js";
 
 const log = Pino({ level: config.LOG_LEVEL || "info" });
 
-export class TradingEngine {
+class TradingEngine {
   constructor() {
     this.active = false;
-    this.positions = [];
+    this.positions = new Map();        // address → position
+    this.locks = new Set();            // in-flight tokens
+    this.monitorInterval = null;
+    this.bot = null;
   }
 
+  /* ============================================
+     Dependency Injection
+  ============================================ */
+  attachBot(botInstance) {
+    this.bot = botInstance;
+  }
+
+  /* ============================================
+     Initialization
+  ============================================ */
   async init() {
-    log.info("💹 Initializing Hyper Beast Trading Engine...");
+    if (this.active) return;
+
+    log.info("💹 Initializing Trading Engine...");
+
     try {
       const balance = await checkBalance();
       log.info(`💰 Wallet balance: $${balance}`);
       this.active = true;
     } catch (err) {
-      log.error({ err }, "Failed to initialize trading engine wallet");
+      log.error({ err }, "Wallet initialization failed");
     }
   }
 
+  /* ============================================
+     LOCK SYSTEM (Prevents Double Buys)
+  ============================================ */
+  acquireLock(token) {
+    if (this.locks.has(token)) return false;
+    this.locks.add(token);
+    return true;
+  }
+
+  releaseLock(token) {
+    this.locks.delete(token);
+  }
+
+  /* ============================================
+     TRADE EXECUTION
+  ============================================ */
   async executeTrade(signal, type = "BUY") {
     if (!this.active) return { status: "skipped", reason: "Engine inactive" };
-    if (!signal || !signal.token) return { status: "skipped", reason: "Invalid signal" };
+    if (!signal?.token) return { status: "skipped", reason: "Invalid signal" };
+
+    const token = signal.token;
+
+    if (!this.acquireLock(token)) {
+      return { status: "skipped", reason: "Trade already in progress" };
+    }
 
     try {
-      // Risk check
       if (signal.riskLevel === "HIGH") {
-        log.warn({ token: signal.token }, "Trade skipped due to high risk");
         return { status: "skipped", reason: "High risk" };
       }
 
-      // Amount to buy
-      const amountUSD = signal.details?.recommended?.minBuyUsd ?? config.SNIPER?.MAX_TRADE_USD ?? 10;
+      const amountUSD =
+        signal.details?.recommended?.minBuyUsd ??
+        config.SNIPER?.MAX_TRADE_USD ??
+        10;
 
-      // Check balance & trading guard
       const balance = await checkBalance();
+
       if (balance < amountUSD || !canTrade(amountUSD)) {
-        log.warn({ token: signal.token, balance }, "Trade blocked by guard/insufficient funds");
-        return { status: "skipped", reason: "Insufficient balance / trading guard" };
+        return { status: "skipped", reason: "Insufficient balance / guard" };
       }
 
-      // Execute order
-      const result = await placeBuyOrder(signal.token, amountUSD);
-      log.info({ token: signal.token, result }, "Trade executed");
+      /* -------- PAPER MODE -------- */
+      if (config.TRADING_MODE === "paper") {
+        const fakePosition = {
+          token,
+          entryUSD: amountUSD,
+          entryTime: Date.now(),
+          status: "OPEN",
+          paper: true
+        };
 
-      // Record loss & store position
-      recordLoss(amountUSD);
-      this.positions.push({ signal, result });
+        this.positions.set(token, fakePosition);
+
+        log.info({ token }, "Paper trade executed");
+        return { status: "paper_success", position: fakePosition };
+      }
+
+      /* -------- LIVE MODE -------- */
+      const timeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Trade timeout")), 20_000)
+      );
+
+      const trade = placeBuyOrder(token, amountUSD);
+
+      const result = await Promise.race([trade, timeout]);
+
+      const position = {
+        token,
+        entryUSD: amountUSD,
+        txHash: result?.txHash,
+        entryTime: Date.now(),
+        status: "OPEN",
+        paper: false
+      };
+
+      this.positions.set(token, position);
+
+      log.info({ token, result }, "Live trade executed");
 
       return { status: "success", result };
+
     } catch (err) {
-      log.error({ token: signal.token, err }, "Trade execution failed");
-      await sendAdminNotification(global.bot, `❌ Trade failed: ${signal.token} - ${err.message}`);
+      log.error({ token, err }, "Trade execution failed");
+
       await rotateRPC();
+
+      if (this.bot && config.ADMIN_CHAT_ID) {
+        await this.bot.telegram.sendMessage(
+          config.ADMIN_CHAT_ID,
+          `❌ Trade failed for ${token}\n${err.message}`
+        );
+      }
+
       return { status: "error", error: err.message };
+
+    } finally {
+      this.releaseLock(token);
     }
   }
 
+  /* ============================================
+     SIGNAL PROCESSING
+  ============================================ */
   async processSignal(signal) {
-    if (!signal || !signal.token) return null;
+    if (!signal?.token) return null;
 
-    // Run candidate processing (anti-rug / scoring)
     await processSignalCandidate(signal);
 
-    // Build Telegram payload
-    const payload = buildTelegramMessage(signal);
-    log.info({ token: signal.token }, "Signal processed & Telegram-ready");
-
-    return payload;
+    return buildTelegramMessage(signal);
   }
 
+  /* ============================================
+     ENGINE LOOP
+  ============================================ */
   async runEngine(signals = []) {
     if (!this.active) await this.init();
+
     const results = [];
 
     for (const signal of signals) {
       try {
         const payload = await this.processSignal(signal);
         const tradeResult = await this.executeTrade(signal);
+
         results.push({ payload, tradeResult });
       } catch (err) {
-        log.error({ err, signalId: signal.id }, "Engine loop error");
+        log.error({ err, token: signal?.token }, "Engine loop error");
       }
     }
 
     return results;
   }
 
+  /* ============================================
+     RPC MONITOR
+  ============================================ */
   startMonitoring(interval = 15_000) {
-    if (!this.active) this.init();
+    if (this.monitorInterval) return;
 
-    log.info("⚡ Trading engine monitoring started");
-    setInterval(async () => {
+    log.info("⚡ Engine monitoring started");
+
+    this.monitorInterval = setInterval(async () => {
       try {
         const web3 = await getWeb3();
         await web3.eth.getBlockNumber();
@@ -120,10 +204,25 @@ export class TradingEngine {
     }, interval);
   }
 
+  stopMonitoring() {
+    if (this.monitorInterval) {
+      clearInterval(this.monitorInterval);
+      this.monitorInterval = null;
+      log.info("🛑 Engine monitoring stopped");
+    }
+  }
+
+  /* ============================================
+     STATUS
+  ============================================ */
   getStatus() {
-    return { active: this.active, positions: this.positions, ...getTradingStatus() };
+    return {
+      active: this.active,
+      openPositions: [...this.positions.values()],
+      locks: [...this.locks],
+      ...getTradingStatus()
+    };
   }
 }
 
-// Export singleton instance
 export default new TradingEngine();
