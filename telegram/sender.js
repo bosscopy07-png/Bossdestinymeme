@@ -1,169 +1,179 @@
 import { Markup } from "telegraf";
-import fs from "fs";
+import fs from "fs/promises";
 import path from "path";
 import config from "../config/index.js";
 import { logInfo, logError } from "../utils/logs.js";
 import { escapeMarkdownV2 } from "../utils/format.js";
 
-// ----------------------
-// INTERNAL STATE
-// ----------------------
+/* ======================================================
+   ADMIN NOTIFIER REGISTRY
+====================================================== */
 let adminNotifier = null;
 export function registerAdminNotifier(fn) {
   adminNotifier = fn;
 }
 
-// ----------------------
-// SEEN PAIRS STORAGE
-// ----------------------
+/* ======================================================
+   SEEN PAIRS (TTL + ASYNC PERSISTENCE)
+====================================================== */
 const SEEN_FILE = path.resolve(process.cwd(), "seen_pairs.json");
-let seenPairs = new Set();
+const SEEN_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
 
-try {
-  if (fs.existsSync(SEEN_FILE)) {
-    const fileData = JSON.parse(fs.readFileSync(SEEN_FILE, "utf8"));
-    if (Array.isArray(fileData)) {
-      seenPairs = new Set(fileData.map(a => a.toLowerCase()));
-    }
-  }
-} catch (err) {
-  logError("Failed to load seen pairs file", err);
-}
+let seenPairs = new Map();
+let persistScheduled = false;
 
-function saveSeen() {
+/* ---------- LOAD ---------- */
+(async function loadSeen() {
   try {
-    fs.writeFileSync(SEEN_FILE, JSON.stringify([...seenPairs], null, 2));
-  } catch (err) {
-    logError("Failed to write seen pairs file", err);
+    const raw = await fs.readFile(SEEN_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      parsed.forEach(({ key, ts }) => {
+        if (Date.now() - ts < SEEN_TTL_MS) {
+          seenPairs.set(key, ts);
+        }
+      });
+    }
+  } catch {
+    logInfo("No existing seen_pairs.json found");
   }
+})();
+
+/* ---------- SAVE (BUFFERED) ---------- */
+function schedulePersist() {
+  if (persistScheduled) return;
+  persistScheduled = true;
+
+  setTimeout(async () => {
+    try {
+      const data = [...seenPairs.entries()].map(([key, ts]) => ({ key, ts }));
+      await fs.writeFile(SEEN_FILE, JSON.stringify(data, null, 2));
+    } catch (err) {
+      logError("Failed to persist seen pairs", err);
+    } finally {
+      persistScheduled = false;
+    }
+  }, 1000);
 }
 
-export function isPairSent(address) {
-  return seenPairs.has(address.toLowerCase());
+function pairKey(address, chain = "bsc") {
+  return `${chain}:${address}`.toLowerCase();
 }
 
-export function markPairAsSent(address) {
-  const key = address.toLowerCase();
-  if (!seenPairs.has(key)) {
-    seenPairs.add(key);
-    saveSeen();
-  }
+export function isPairSent(address, chain) {
+  return seenPairs.has(pairKey(address, chain));
 }
 
-// ----------------------
-// UNIVERSAL SENDER
-// ----------------------
+export function markPairAsSent(address, chain) {
+  const key = pairKey(address, chain);
+  seenPairs.set(key, Date.now());
+  schedulePersist();
+}
+
+/* ======================================================
+   UNIVERSAL SAFE SENDER
+====================================================== */
 export async function send(bot, chatId, payload = {}) {
   try {
-    const text = payload.text || "";
+    const text = escapeMarkdownV2(payload.text || "");
     const options = payload.options || {};
 
-    return await bot.telegram.sendMessage(
-      chatId,
-      escapeMarkdownV2(text),
-      {
-        parse_mode: "MarkdownV2",
-        disable_web_page_preview: true,
-        ...options
-      }
-    );
+    return await bot.telegram.sendMessage(chatId, text, {
+      parse_mode: "MarkdownV2",
+      disable_web_page_preview: true,
+      ...options,
+    });
   } catch (err) {
-    logError("Sender.send() failed", err);
-    if (adminNotifier) {
-      adminNotifier(`Sender Error: ${err.message}`);
-    }
+    logError("Telegram send failed", err);
+    adminNotifier?.(`Telegram send error: ${err.message}`);
   }
 }
 
-// ----------------------
-// BUILD SIGNAL MESSAGE
-// ----------------------
+/* ======================================================
+   SIGNAL MESSAGE BUILDER
+====================================================== */
 export function buildSignalMessage(signal) {
+  const num = (n, d = 6) =>
+    typeof n === "number" ? n.toFixed(d) : "0.000000";
+
   return `
-*🚨 NEW TOKEN DETECTED*
+🚨 *NEW TOKEN SIGNAL*
 ━━━━━━━━━━━━━━
-🏷️ *Name:* ${escapeMarkdownV2(signal.token)} (${escapeMarkdownV2(signal.symbol)})
+🏷 *Name:* ${escapeMarkdownV2(signal.token)} (${escapeMarkdownV2(signal.symbol)})
 💠 *Address:* \`${signal.address}\`
-💵 *Price:* $${signal.price?.toFixed(6) ?? "0.000000"}
-🌊 *Liquidity:* $${signal.liquidity?.usd?.toLocaleString() ?? "0"}
-📊 *Volume (24h):* $${signal.volume?.h24?.toLocaleString() ?? "0"}
-⏱️ *Age:* ${escapeMarkdownV2(signal.age ?? "Unknown")}
-🛡️ *Risk:* ${escapeMarkdownV2(signal.riskLevel ?? "HIGH")}
+💵 *Price:* $${num(signal.price)}
+🌊 *Liquidity:* $${signal.liquidity?.usd?.toLocaleString() || "0"}
+📊 *Volume 24h:* $${signal.volume?.h24?.toLocaleString() || "0"}
+⏱ *Age:* ${escapeMarkdownV2(signal.age || "Unknown")}
+🛡 *Risk:* ${escapeMarkdownV2(signal.riskLevel || "UNKNOWN")}
 ━━━━━━━━━━━━━━
-👥 *Holders:* ${signal.holders?.toLocaleString() ?? "N/A"}
-💰 *FDV:* $${signal.fdv?.toLocaleString() ?? "0"}
-🚩 *Flags:* ${signal.flags?.length ? signal.flags.map(escapeMarkdownV2).join(", ") : "None"}
+👥 *Holders:* ${signal.holders || "N/A"}
+💰 *FDV:* $${signal.fdv?.toLocaleString() || "0"}
+🚩 *Flags:* ${
+    signal.flags?.length
+      ? signal.flags.map(escapeMarkdownV2).join(", ")
+      : "None"
+  }
 `.trim();
 }
 
-// ----------------------
-// SEND SIGNAL
-// ----------------------
+/* ======================================================
+   SEND TOKEN SIGNAL (IDEMPOTENT)
+====================================================== */
 export async function sendTokenSignal(bot, chatId, signal) {
   try {
     if (!signal?.address) return;
 
-    if (isPairSent(signal.address)) {
-      logInfo(`Signal already sent: ${signal.symbol}`);
-      return;
-    }
+    if (isPairSent(signal.address, signal.chain)) return;
 
     const message = buildSignalMessage(signal);
 
     const keyboard = Markup.inlineKeyboard([
       [
-        Markup.button.callback("💥 Snipe", `BUY_${signal.address}`),
-        Markup.button.callback("👀 Watch", `WATCH_${signal.address}`)
+        Markup.button.callback("🚀 Snipe", `BUY_${signal.address}`),
+        Markup.button.callback("👁 Watch", `WATCH_${signal.address}`),
       ],
       [
         Markup.button.url(
           "📈 Chart",
           signal.pairUrl || "https://dexscreener.com"
-        )
-      ]
+        ),
+      ],
     ]);
 
     await bot.telegram.sendMessage(chatId, message, {
       parse_mode: "MarkdownV2",
       disable_web_page_preview: true,
-      reply_markup: keyboard.reply_markup
+      reply_markup: keyboard.reply_markup,
     });
 
-    markPairAsSent(signal.address);
-    logInfo(`Signal delivered: ${signal.symbol}`);
+    markPairAsSent(signal.address, signal.chain);
+    logInfo(`Signal sent: ${signal.symbol}`);
   } catch (err) {
-    logError("Failed to send token signal", err);
-    if (adminNotifier) {
-      adminNotifier(`Signal Error: ${err.message}`);
-    }
+    logError("sendTokenSignal failed", err);
+    adminNotifier?.(`Signal send error: ${err.message}`);
   }
 }
 
-// ----------------------
-// ADMIN NOTIFICATION
-// ----------------------
+/* ======================================================
+   ADMIN NOTIFICATION
+====================================================== */
 export async function sendAdminNotification(bot, message) {
   if (!config.ADMIN_CHAT_ID) return;
-
   try {
     await bot.telegram.sendMessage(
       config.ADMIN_CHAT_ID,
       escapeMarkdownV2(message),
       { parse_mode: "MarkdownV2" }
     );
-    logInfo("Admin notification sent");
   } catch (err) {
-    logError("Failed to send admin message", err);
+    logError("Admin notify failed", err);
   }
 }
 
-// ----------------------
-// FALLBACK SIMPLE NOTIFIER
-// ----------------------
+/* ======================================================
+   FALLBACK NOTIFIER
+====================================================== */
 export async function notifyTelegram(bot, chatId, text) {
-  try {
-    await send(bot, chatId, { text });
-  } catch (err) {
-    logError("notifyTelegram failed", err);
+  return send(bot, chatId, { text });
   }
-}
