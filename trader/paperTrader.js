@@ -1,5 +1,5 @@
 // trader/paperTrader.js
-// High-fidelity persistent paper trading engine
+// High-fidelity persistent paper trading engine (v2)
 
 import fs from "fs/promises";
 import path from "path";
@@ -8,22 +8,45 @@ import { logInfo, logWarn, logError } from "../utils/logs.js";
 import config from "../config/index.js";
 
 const DB_FILE = path.join(process.cwd(), "paper_pnl.json");
+const LOCK_FILE = DB_FILE + ".lock";
 
 /* ======================================================
    DEFAULT DB
 ====================================================== */
 const DEFAULT_DB = {
   balanceUsd: 1000,
+  peakBalance: 1000,
   positions: {}, // token => { tokens, avgEntry }
   trades: [],
   stats: {
     wins: 0,
-    losses: 0
+    losses: 0,
+    maxDrawdown: 0
   }
 };
 
 /* ======================================================
-   DB HELPERS (ATOMIC)
+   SIMPLE MUTEX
+====================================================== */
+async function withLock(fn) {
+  while (true) {
+    try {
+      await fs.open(LOCK_FILE, "wx");
+      break;
+    } catch {
+      await new Promise(r => setTimeout(r, 20));
+    }
+  }
+
+  try {
+    return await fn();
+  } finally {
+    await fs.unlink(LOCK_FILE).catch(() => {});
+  }
+}
+
+/* ======================================================
+   DB HELPERS
 ====================================================== */
 async function loadDB() {
   try {
@@ -46,6 +69,12 @@ function id(prefix) {
   return `${prefix}_${crypto.randomUUID()}`;
 }
 
+function validatePrice(price) {
+  if (!price || !Number.isFinite(price) || price <= 0) {
+    throw new Error("Invalid price feed");
+  }
+}
+
 function applySlippage(price, percent, side) {
   const p = percent / 100;
   return side === "buy" ? price * (1 + p) : price * (1 - p);
@@ -55,97 +84,109 @@ function applySlippage(price, percent, side) {
    BUY
 ====================================================== */
 export async function paperBuy({ token, priceUsd }) {
-  const db = await loadDB();
+  validatePrice(priceUsd);
 
-  const riskPct = config.PAPER_RISK_PERCENT ?? 5;
-  const usdAmount = (db.balanceUsd * riskPct) / 100;
+  return withLock(async () => {
+    const db = await loadDB();
 
-  if (usdAmount < 1) {
-    logWarn("Paper buy skipped: too small balance");
-    return;
-  }
+    const riskPct = config.PAPER_RISK_PERCENT ?? 5;
+    const usdAmount = (db.balanceUsd * riskPct) / 100;
 
-  const execPrice = applySlippage(
-    priceUsd,
-    config.MAX_SLIPPAGE ?? 1,
-    "buy"
-  );
+    if (usdAmount < 1) {
+      logWarn("Paper buy skipped: too small balance");
+      return;
+    }
 
-  const tokens = usdAmount / execPrice;
+    const execPrice = applySlippage(
+      priceUsd,
+      config.MAX_SLIPPAGE ?? 1,
+      "buy"
+    );
 
-  db.balanceUsd -= usdAmount;
+    const tokens = usdAmount / execPrice;
+    db.balanceUsd -= usdAmount;
 
-  const pos = db.positions[token] || { tokens: 0, avgEntry: 0 };
-  const totalValue =
-    pos.tokens * pos.avgEntry + tokens * execPrice;
+    const pos = db.positions[token] || { tokens: 0, avgEntry: 0 };
+    const totalValue =
+      pos.tokens * pos.avgEntry + tokens * execPrice;
 
-  pos.tokens += tokens;
-  pos.avgEntry = totalValue / pos.tokens;
+    pos.tokens += tokens;
+    pos.avgEntry = totalValue / pos.tokens;
+    db.positions[token] = pos;
 
-  db.positions[token] = pos;
+    db.trades.push({
+      id: id("buy"),
+      side: "buy",
+      token,
+      usd: usdAmount,
+      price: execPrice,
+      tokens,
+      time: Date.now()
+    });
 
-  db.trades.push({
-    id: id("buy"),
-    side: "buy",
-    token,
-    usd: usdAmount,
-    price: execPrice,
-    tokens,
-    time: Date.now()
+    await saveDB(db);
+    logInfo(`📘 PAPER BUY ${token} $${usdAmount.toFixed(2)}`);
   });
-
-  await saveDB(db);
-
-  logInfo(`📘 PAPER BUY ${token} $${usdAmount.toFixed(2)}`);
 }
 
 /* ======================================================
-   SELL (TP / SL)
+   SELL (supports partial)
 ====================================================== */
-export async function paperSell({ token, priceUsd, reason }) {
-  const db = await loadDB();
-  const pos = db.positions[token];
-  if (!pos) return;
+export async function paperSell({ token, priceUsd, reason, fraction = 1 }) {
+  validatePrice(priceUsd);
 
-  const execPrice = applySlippage(
-    priceUsd,
-    config.MAX_SLIPPAGE ?? 1,
-    "sell"
-  );
+  return withLock(async () => {
+    const db = await loadDB();
+    const pos = db.positions[token];
+    if (!pos) return;
 
-  const usdOut = pos.tokens * execPrice;
-  const pnl = usdOut - pos.tokens * pos.avgEntry;
+    const sellTokens = pos.tokens * fraction;
+    if (sellTokens <= 0) return;
 
-  db.balanceUsd += usdOut;
-  delete db.positions[token];
+    const execPrice = applySlippage(
+      priceUsd,
+      config.MAX_SLIPPAGE ?? 1,
+      "sell"
+    );
 
-  pnl > 0 ? db.stats.wins++ : db.stats.losses++;
+    const usdOut = sellTokens * execPrice;
+    const cost = sellTokens * pos.avgEntry;
+    const pnl = usdOut - cost;
 
-  db.trades.push({
-    id: id("sell"),
-    side: "sell",
-    token,
-    usd: usdOut,
-    price: execPrice,
-    pnl,
-    reason,
-    time: Date.now()
+    pos.tokens -= sellTokens;
+    if (pos.tokens <= 0) delete db.positions[token];
+
+    db.balanceUsd += usdOut;
+
+    db.peakBalance = Math.max(db.peakBalance, db.balanceUsd);
+    const dd =
+      (db.peakBalance - db.balanceUsd) / db.peakBalance;
+    db.stats.maxDrawdown = Math.max(db.stats.maxDrawdown, dd);
+
+    pnl > 0 ? db.stats.wins++ : db.stats.losses++;
+
+    db.trades.push({
+      id: id("sell"),
+      side: "sell",
+      token,
+      usd: usdOut,
+      price: execPrice,
+      pnl,
+      reason,
+      time: Date.now()
+    });
+
+    await saveDB(db);
+    logInfo(`📕 PAPER SELL ${token} PnL: $${pnl.toFixed(2)} (${reason})`);
   });
-
-  await saveDB(db);
-
-  logInfo(
-    `📕 PAPER SELL ${token} PnL: $${pnl.toFixed(2)} (${reason})`
-  );
 }
 
 /* ======================================================
    MONITOR ENGINE
 ====================================================== */
-export async function evaluatePaperPosition({
-  token,
-  currentPrice
-}) {
+export async function evaluatePaperPosition({ token, currentPrice }) {
+  validatePrice(currentPrice);
+
   const db = await loadDB();
   const pos = db.positions[token];
   if (!pos) return;
@@ -154,7 +195,7 @@ export async function evaluatePaperPosition({
     (currentPrice - pos.avgEntry) / pos.avgEntry;
 
   if (change >= 0.3) {
-    await paperSell({ token, priceUsd: currentPrice, reason: "TP" });
+    await paperSell({ token, priceUsd: currentPrice, reason: "TP", fraction: 0.5 });
   }
 
   if (change <= -0.2) {
@@ -174,7 +215,8 @@ export async function getPaperSummary() {
     winRate:
       db.trades.length === 0
         ? 0
-        : (db.stats.wins / db.trades.length) * 100
+        : (db.stats.wins / db.trades.length) * 100,
+    maxDrawdown: (db.stats.maxDrawdown * 100).toFixed(2) + "%"
   };
 }
 
