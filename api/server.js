@@ -11,7 +11,7 @@ import { logInfo, logError } from "../utils/logs.js";
 import { startTelegramBot } from "../telegram/bot.js";
 
 // --------------------------------------------------
-// CREATE APP INSTANCE
+// CREATE EXPRESS APP
 // --------------------------------------------------
 const app = express();
 
@@ -30,7 +30,7 @@ app.use(
 );
 
 // --------------------------------------------------
-// CORS CONFIG (SAFE DEFAULT, OVERRIDDEN BY ENV)
+// CORS CONFIGURATION
 // --------------------------------------------------
 app.use(
   cors({
@@ -41,7 +41,7 @@ app.use(
 );
 
 // --------------------------------------------------
-// JSON PARSER (FAIL-SAFE)
+// JSON PARSER WITH ERROR HANDLING
 // --------------------------------------------------
 app.use(
   express.json({
@@ -58,7 +58,7 @@ app.use(
 );
 
 // --------------------------------------------------
-// RATE LIMITING (ANTI-BOT / ANTI-DDOS)
+// RATE LIMITING (ANTI-BOT / DDOS)
 // --------------------------------------------------
 app.use(
   rateLimit({
@@ -71,7 +71,7 @@ app.use(
 );
 
 // --------------------------------------------------
-// REQUEST LOGGER (ONLY DEV MODE)
+// REQUEST LOGGER (DEV MODE ONLY)
 // --------------------------------------------------
 if (config.NODE_ENV === "development") {
   app.use((req, res, next) => {
@@ -86,7 +86,7 @@ if (config.NODE_ENV === "development") {
 app.use("/api", routes);
 
 // --------------------------------------------------
-// HEALTHCHECK (SELF-HEAL READY)
+// HEALTHCHECK ROUTES
 // --------------------------------------------------
 app.get("/health", (req, res) => {
   res.json({
@@ -118,28 +118,25 @@ app.use((err, req, res, next) => {
 });
 
 // --------------------------------------------------
-// SERVER BOOT FUNCTION
+// SERVER START FUNCTION
 // --------------------------------------------------
-export async function startServer(
-  port = config.API?.PORT || config.api?.PORT || 5000
-) {
+export async function startServer(port = config.API?.PORT || 5000) {
   const normalizedPort = Number(port);
 
   try {
-    // ------------------------------------------
-    // OPTIONAL: startup tasks (DB, cache, bot)
-    // ------------------------------------------
+    // Optional: start Telegram bot
     await startTelegramBot();
 
+    // Start Express server
     const server = app.listen(normalizedPort, () => {
       logInfo(`🚀 API server running on port ${normalizedPort}`);
     });
 
     // Graceful shutdown
     const shutdown = (signal) => {
-      logInfo(`⚠ Received ${signal}. Shutting down...`);
+      logInfo(`⚠ Received ${signal}. Shutting down server...`);
       server.close(() => {
-        logInfo("Server closed. Exiting now.");
+        logInfo("Server closed. Exiting process.");
         process.exit(0);
       });
     };
@@ -159,7 +156,7 @@ export async function startServer(
 // AUTO-START WHEN RUN DIRECTLY
 // --------------------------------------------------
 if (import.meta.url.endsWith("/api/server.js")) {
-  startServer();
+  startServer(process.env.PORT || config.API?.PORT || 5000);
 }
 
 export default app;
