@@ -176,3 +176,15 @@ export async function sendAdminNotification(bot, message) {
 export async function notifyTelegram(bot, chatId, text) {
   return send(bot, chatId, { text });
          }
+// At the bottom of telegram/sender.js
+const sender = {
+  send,
+  sendTokenSignal,
+  sendAdminNotification,
+  notifyTelegram,
+  registerAdminNotifier,
+  isPairSent,
+  markPairAsSent,
+  buildSignalMessage,
+};
+export default sender;
