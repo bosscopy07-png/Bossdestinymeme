@@ -78,8 +78,8 @@ class TelegramHandlers {
     try {
       await ctx.answerCbQuery("Processing...");
 
+      // --- MAIN HANDLER MAP ---
       const handlerMap = {
-        // --- MAIN UI ---
         "ADMIN_DASHBOARD": () => this.send(chatId, "📊 *Dashboard*", ui.homeMenu()),
         "START_SCANNER": () => this.toggleScanner(chatId, true),
         "STOP_SCANNER": () => this.toggleScanner(chatId, false),
@@ -87,40 +87,29 @@ class TelegramHandlers {
         "SETTINGS_MENU": () => this.send(chatId, "⚙️ *Settings*", ui.settingsMenu()),
         "VIEW_LOGS": () => this.send(chatId, "📨 *Fetching Logs...*\nComing soon..."),
 
-        // --- TRADING ---
         "ENABLE_LIVE": () => this.setTradingMode(chatId, "live"),
         "ENABLE_PAPER": () => this.setTradingMode(chatId, "paper"),
 
-        // --- SETTINGS ---
         "REFRESH_RPCS": () => this.send(chatId, "🔁 *Refreshing RPC endpoints...*"),
         "ANTI_RUG_SETTINGS": () => this.send(chatId, "🛡 *Anti-rug settings coming soon...*"),
 
-        // --- SNIPER ---
         "OPEN_SNIPER": () => this.openSniper(chatId),
         "SNIPER_STATUS": () => this.send(chatId, "🎯 *Sniper Status*\nRunning: No\nLast trade: None\nErrors: 0"),
 
-        // --- PNL / SIGNALS ---
-        "PNL_MENU": () => this.send(chatId, "📈 *PNL Dashboard*\nStats loading soon..."),
-        "SIGNALS_MENU": () => this.send(chatId, "📡 *Signals Panel*\nSignals will appear here"),
+        "PNL_MENU": () => this.showPnl(chatId),
+        "SIGNALS_MENU": () => this.showSignals(chatId),
         "DEV_CHECK_MENU": () => this.send(chatId, "🧪 *Developer Diagnostics*\nComing soon..."),
       };
 
       // --- TOKEN ACTIONS ---
-      if (data.startsWith("snipe_") || data.startsWith("BUY_")) {
-        return this.handleBuy(chatId, data.replace(/^(snipe_|BUY_)/, ""));
-      }
-
-      if (data.startsWith("watch_") || data.startsWith("WATCH_")) {
-        return this.handleWatch(chatId, data.replace(/^(watch_|WATCH_)/, ""));
-      }
-
-      if (data.startsWith("ignore_")) return this.send(chatId, "❌ Ignored.");
-
-      if (data.startsWith("DETAILS_")) return this.handleDetails(chatId, data.replace("DETAILS_", ""));
-      if (data.startsWith("SNIPER_PRESET_")) return this.sniperPreset(chatId, data.replace("SNIPER_PRESET_", ""));
+      if (/^(snipe_|BUY_)/.test(data)) return this.executeTrade(chatId, data.replace(/^(snipe_|BUY_)/, ""));
+      if (/^(watch_|WATCH_)/.test(data)) return this.handleWatch(chatId, data.replace(/^(watch_|WATCH_)/, ""));
+      if (/^ignore_/.test(data)) return this.send(chatId, "❌ Ignored.");
+      if (/^DETAILS_/.test(data)) return this.handleDetails(chatId, data.replace("DETAILS_", ""));
+      if (/^SNIPER_PRESET_/.test(data)) return this.sniperPreset(chatId, data.replace("SNIPER_PRESET_", ""));
 
       // --- ADMIN ---
-      if (data.startsWith("ADMIN_")) return this.handleAdminCallback(ctx, data);
+      if (/^ADMIN_/.test(data)) return this.handleAdminCallback(ctx, data);
 
       // --- DEFAULT ---
       if (handlerMap[data]) return handlerMap[data]();
@@ -137,22 +126,35 @@ class TelegramHandlers {
   /* ===============================
       BUY / WATCH / DETAILS
   =============================== */
-  async handleBuy(chatId, token) {
+  async executeTrade(chatId, token) {
+    const state = getState();
     try {
       await this.send(chatId, `🔫 *Sniping* \`${token}\``);
-      const result = await router.executeSniper(token);
-      await this.send(
-        chatId,
-        result?.success
-          ? `✅ *Buy executed for* \`${token}\``
-          : `❌ Failed to buy \`${token}\`\n${result?.error || "Unknown"}`
-      );
+
+      if (state.tradingMode === "paper" && state.paper.enabled) {
+        const trade = await paperTrader.buy(token, { usdAmount: 100 });
+        await this.send(chatId, `🧪 *Paper Buy Executed:* \`${token}\` @ $${trade.priceUsd.toFixed(6)}`);
+      } else if (state.tradingMode === "live" && state.tradingEnabled) {
+        const result = await router.executeSniper(token);
+        await this.send(
+          chatId,
+          result?.success
+            ? `✅ *Live Buy Executed:* \`${token}\``
+            : `❌ Live buy failed: ${result?.error || "Unknown"}`
+        );
+      } else {
+        await this.send(chatId, "⚠️ Trading is disabled or invalid mode.");
+      }
     } catch (err) {
-      logError("Buy Handler Error", err);
+      logError("Trade Execution Error", err);
+      await this.send(chatId, "❌ Failed to execute trade.");
     }
   }
 
   async handleWatch(chatId, token) {
+    const state = getState();
+    const normalized = token.toLowerCase();
+    if (!state.watchlist.has(normalized)) state.watchlist.add(normalized);
     await this.send(chatId, `👁 *Watching:* \`${token}\``);
   }
 
@@ -174,7 +176,7 @@ class TelegramHandlers {
   }
 
   /* ===============================
-      TRADING ACTIONS
+      TRADING MODE & SCANNER
   =============================== */
   async toggleScanner(chatId, enable) {
     const state = getState();
@@ -185,8 +187,39 @@ class TelegramHandlers {
   async setTradingMode(chatId, mode) {
     const state = getState();
     if (!["live","paper"].includes(mode)) return;
+
     state.tradingMode = mode;
+    if (mode === "paper") state.paper.enabled = true;
     await this.send(chatId, mode === "live" ? "🟢 *Live trading enabled*" : "🧪 *Paper mode enabled*");
+  }
+
+  /* ===============================
+      PNL / SIGNALS DISPLAY
+  =============================== */
+  async showPnl(chatId) {
+    const state = getState();
+    const trades = state.paper.trades || [];
+    const wins = trades.filter(t => t.pnlUsd > 0).length;
+    const losses = trades.filter(t => t.pnlUsd < 0).length;
+    const total = trades.reduce((sum, t) => sum + (t.pnlUsd || 0), 0);
+    const recent = trades.slice(-5).map(t => ({
+      token: t.token,
+      profit: t.pnlUsd,
+      success: t.pnlUsd > 0
+    }));
+    await this.send(chatId, ui.pnlBlock({ total, wins, losses, recent }));
+  }
+
+  async showSignals(chatId) {
+    const state = getState();
+    const signals = state.getSignals();
+    if (!signals || signals.length === 0) {
+      await this.send(chatId, "📡 *No active signals*");
+      return;
+    }
+    for (const s of signals) {
+      await this.send(chatId, ui.tokenBlock(s.token), ui.signalButtons(s.token));
+    }
   }
 
   /* ===============================
@@ -195,9 +228,7 @@ class TelegramHandlers {
   async handleAdminCallback(ctx, data) {
     const chatId = ctx.chat.id;
     const state = getState();
-    if (!this.admins.includes(String(ctx.from.id))) {
-      return ctx.answerCbQuery("⛔ You are not an admin.");
-    }
+    if (!this.admins.includes(String(ctx.from.id))) return ctx.answerCbQuery("⛔ You are not an admin.");
 
     switch(data) {
       case "ADMIN_HALT":
@@ -222,7 +253,7 @@ class TelegramHandlers {
         break;
       case "ADMIN_STATS":
         const stats = state.getStats();
-        await this.send(chatId, `📊 *Stats*\nScanned: ${stats.scanned}\nSignaled: ${stats.signaled}\nSent: ${stats.sent}`);
+        await this.send(chatId, `📊 *Stats*\nScanned: ${stats.scanned}\nSignaled: ${stats.signaled}\nSent: ${stats.sent}\nBuys: ${stats.buys}\nSells: ${stats.sells}\nErrors: ${stats.errors}`);
         break;
       case "ADMIN_BROADCAST":
         await this.send(chatId, "📢 *Broadcasting...* (Coming soon)");
