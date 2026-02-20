@@ -1,123 +1,167 @@
 // trader/pnl.js
-// Records trades for paper & live modes, enhanced PnL calc, and image generation.
+// Unified PnL engine (paper + live), race-safe, multi-position aware
 
 import fs from "fs/promises";
 import path from "path";
+import crypto from "crypto";
 import { generatePnLImage } from "../utils/image.js";
 import { logInfo, logWarn, logError } from "../utils/logs.js";
 
 const DB = path.join(process.cwd(), "pnl.json");
+const LOCK = DB + ".lock";
+
+/* ======================================================
+   MUTEX
+====================================================== */
+async function withLock(fn) {
+  while (true) {
+    try {
+      await fs.open(LOCK, "wx");
+      break;
+    } catch {
+      await new Promise(r => setTimeout(r, 15));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await fs.unlink(LOCK).catch(() => {});
+  }
+}
+
+/* ======================================================
+   DB
+====================================================== */
+const DEFAULT_DB = {
+  balanceUsd: 1000,
+  realizedUsd: 0,
+  trades: [],
+  positions: [],
+  stats: {
+    wins: 0,
+    losses: 0
+  }
+};
 
 async function read() {
   try {
-    const raw = await fs.readFile(DB, "utf8");
-    return JSON.parse(raw);
-  } catch (err) {
-    logWarn("DB read failed, initializing new DB:", err.message);
-    return { trades: [], realizedUsd: 0, balanceUsd: 1000, positions: [] };
+    return JSON.parse(await fs.readFile(DB, "utf8"));
+  } catch {
+    return structuredClone(DEFAULT_DB);
   }
 }
 
-async function write(obj) {
-  try {
-    await fs.writeFile(DB, JSON.stringify(obj, null, 2), "utf8");
-  } catch (err) {
-    logError("DB write failed:", err.message);
-    throw err;
-  }
+async function write(db) {
+  const tmp = DB + ".tmp";
+  await fs.writeFile(tmp, JSON.stringify(db, null, 2));
+  await fs.rename(tmp, DB);
 }
 
-/**
- * Record a trade (buy/sell)
- */
+/* ======================================================
+   RECORD BUY
+====================================================== */
 export async function recordTrade(trade) {
-  const db = await read();
+  return withLock(async () => {
+    const db = await read();
 
-  // Update positions for buys
-  if (trade.side === "buy") {
-    db.positions.push({
-      id: trade.id,
-      token: trade.token,
-      entryPrice: trade.priceUsd,
-      tokens: trade.tokens,
-      usdInvested: trade.usd,
-      timestamp: trade.timestamp,
+    const id = trade.id ?? crypto.randomUUID();
+
+    if (trade.side === "buy") {
+      db.positions.push({
+        id,
+        mode: trade.mode ?? "paper",
+        token: trade.token,
+        entryPrice: trade.priceUsd,
+        tokens: trade.tokens,
+        usdInvested: trade.usd,
+        openedAt: trade.timestamp ?? Date.now()
+      });
+    }
+
+    db.trades.push({ ...trade, id });
+    await write(db);
+
+    logInfo(`📘 Trade recorded: ${id}`);
+    return id;
+  });
+}
+
+/* ======================================================
+   RECORD SELL
+====================================================== */
+export async function recordClose({
+  positionId,
+  soldPriceUsd,
+  soldUsd,
+  closedAt = Date.now()
+}) {
+  return withLock(async () => {
+    const db = await read();
+
+    const idx = db.positions.findIndex(p => p.id === positionId);
+    if (idx === -1) {
+      logWarn(`No open position found: ${positionId}`);
+      return;
+    }
+
+    const pos = db.positions[idx];
+    const pnlUsd = soldUsd - pos.usdInvested;
+
+    db.realizedUsd += pnlUsd;
+    db.balanceUsd += soldUsd;
+    pnlUsd >= 0 ? db.stats.wins++ : db.stats.losses++;
+
+    db.trades.push({
+      id: crypto.randomUUID(),
+      side: "sell",
+      mode: pos.mode,
+      token: pos.token,
+      soldPriceUsd,
+      soldUsd,
+      pnlUsd,
+      closedAt
     });
-  }
 
-  db.trades.push(trade);
-  await write(db);
-  logInfo(`Recorded trade ${trade.id ?? trade.tx ?? "unknown"}`);
-  return trade;
+    db.positions.splice(idx, 1);
+    await write(db);
+
+    logInfo(`📕 Closed ${pos.token} | PnL: $${pnlUsd.toFixed(2)}`);
+  });
 }
 
-/**
- * Close a trade (sell)
- * Calculates PnL automatically
- */
-export async function recordClose({ id, token, soldPriceUsd, soldUsd, closedAt = Date.now() }) {
-  const db = await read();
-
-  const posIndex = db.positions.findIndex(p => p.id === id || p.token === token);
-  if (posIndex === -1) {
-    logWarn(`No open position found for ${id ?? token}`);
-    return;
-  }
-
-  const position = db.positions[posIndex];
-
-  const pnlUsd = soldUsd - position.usdInvested;
-  db.realizedUsd = (db.realizedUsd || 0) + pnlUsd;
-  db.balanceUsd = (db.balanceUsd || 0) + soldUsd;
-
-  // Mark trade as closed
-  const trade = db.trades.find(t => t.id === id);
-  if (trade) {
-    trade.closedAt = closedAt;
-    trade.pnlUsd = pnlUsd;
-    trade.soldPriceUsd = soldPriceUsd;
-    trade.soldUsd = soldUsd;
-  }
-
-  // Remove position
-  db.positions.splice(posIndex, 1);
-
-  await write(db);
-  logInfo(`Closed position ${id ?? token}, PnL: $${pnlUsd.toFixed(2)}`);
-}
-
-/**
- * Get PnL summary
- */
+/* ======================================================
+   SUMMARY
+====================================================== */
 export async function getSummary() {
   const db = await read();
 
-  const unrealizedUsd = db.positions.reduce((sum, p) => sum + (p.tokens * p.entryPrice), 0);
+  const total = db.stats.wins + db.stats.losses;
+  const winRate = total ? (db.stats.wins / total) * 100 : 0;
 
-  const summary = {
+  return {
+    balanceUsd: db.balanceUsd,
+    realizedUsd: db.realizedUsd,
+    openPositions: db.positions.length,
     totalTrades: db.trades.length,
-    realizedUsd: db.realizedUsd || 0,
-    balanceUsd: db.balanceUsd || 1000,
-    unrealizedUsd,
-    positions: db.positions.length,
+    wins: db.stats.wins,
+    losses: db.stats.losses,
+    winRate: winRate.toFixed(2) + "%"
   };
-
-  return summary;
 }
 
-/**
- * Export chart (image) for PnL visualization
- */
+/* ======================================================
+   EXPORT IMAGE
+====================================================== */
 export async function exportChart() {
   const db = await read();
-  try {
-    const file = await generatePnLImage(db.trades, "pnl.png");
-    logInfo("PnL chart generated");
-    return file;
-  } catch (err) {
-    logError("Failed to generate PnL chart:", err.message);
-    throw err;
-  }
+  const file = await generatePnLImage(db.trades, "pnl.png");
+  logInfo("📊 PnL chart generated");
+  return file;
 }
 
-export default { recordTrade, recordClose, getSummary, exportChart };
+export default {
+  recordTrade,
+  recordClose,
+  getSummary,
+  exportChart
+};
