@@ -8,7 +8,7 @@ import config from "../config/index.js";
 import { logInfo, logError } from "../utils/logs.js";
 
 // Optional: Auto-start Telegram bot here
-// import { startTelegramBot } from "../telegram/bot.js";
+import { startTelegramBot } from "../telegram/bot.js";
 
 // --------------------------------------------------
 // CREATE APP INSTANCE
