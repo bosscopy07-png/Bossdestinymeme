@@ -15,7 +15,7 @@ class TelegramHandlers {
 
   /* ===============================
       INIT
-  =============================== */
+  ================================ */
   init() {
     this.bot.start((ctx) => this.start(ctx));
     this.bot.on("text", (ctx) => this.textHandler(ctx));
@@ -25,8 +25,9 @@ class TelegramHandlers {
   }
 
   /* ===============================
-      SAFE SEND
-  =============================== */
+      SAFE SEND (TEXT ONLY FOR NOW)
+      ✅ Can later add image support
+  ================================ */
   async send(chatId, text, extra = {}) {
     try {
       await this.bot.telegram.sendMessage(chatId, text, {
@@ -41,7 +42,7 @@ class TelegramHandlers {
 
   /* ===============================
       START
-  =============================== */
+  ================================ */
   async start(ctx) {
     await this.send(ctx.chat.id, ui.startMessage(), ui.startKeyboard());
     logInfo(`User started bot: ${ctx.chat.id}`);
@@ -49,7 +50,7 @@ class TelegramHandlers {
 
   /* ===============================
       TEXT HANDLER
-  =============================== */
+  ================================ */
   async textHandler(ctx) {
     const text = ctx.message.text.trim();
     const chatId = ctx.chat.id;
@@ -65,7 +66,7 @@ class TelegramHandlers {
 
   /* ===============================
       CALLBACK ROUTING
-  =============================== */
+  ================================ */
   async handleCallback(ctx) {
     const chatId = ctx.chat?.id;
     const data = ctx.update?.callback_query?.data;
@@ -128,7 +129,6 @@ class TelegramHandlers {
 
       logWarn(`Unknown callback: ${data}`);
       await this.send(chatId, `⚠️ Unknown action: ${data}`);
-
     } catch (err) {
       logError("Callback Error", err);
       await this.send(chatId, "❌ Error processing action.");
@@ -137,7 +137,7 @@ class TelegramHandlers {
 
   /* ===============================
       ADMIN DASHBOARD
-  =============================== */
+  ================================ */
   async openAdminDashboard(chatId) {
     const state = getState();
 
@@ -146,22 +146,22 @@ class TelegramHandlers {
 
 Scanner: ${state.scannerRunning ? "ON" : "OFF"}
 Trading Mode: ${state.tradingMode}
-Trading Enabled: ${state.tradingEnabled ? "YES" : "NO"}
-Signals Enabled: ${state.signalingEnabled ? "YES" : "NO"}
+Trading Enabled: ${state.tradingEnabled ?? "N/A"}
+Signals Enabled: ${state.signalingEnabled ?? "N/A"}
 `.trim();
 
     const keyboard = Markup.inlineKeyboard([
       [
-        Markup.button.callback("⛔ Halt Trading","ADMIN_HALT"),
-        Markup.button.callback("▶️ Resume Trading","ADMIN_RESUME"),
+        Markup.button.callback("⛔ Halt Trading", "ADMIN_HALT"),
+        Markup.button.callback("▶️ Resume Trading", "ADMIN_RESUME"),
       ],
       [
-        Markup.button.callback("⏸️ Pause Scan","ADMIN_PAUSE_SCAN"),
-        Markup.button.callback("▶️ Resume Scan","ADMIN_RESUME_SCAN"),
+        Markup.button.callback("⏸️ Pause Scan", "ADMIN_PAUSE_SCAN"),
+        Markup.button.callback("▶️ Resume Scan", "ADMIN_RESUME_SCAN"),
       ],
       [
-        Markup.button.callback("📊 Stats","ADMIN_STATS"),
-        Markup.button.callback("🔄 Restart","ADMIN_RESTART"),
+        Markup.button.callback("📊 Stats", "ADMIN_STATS"),
+        Markup.button.callback("🔄 Restart", "ADMIN_RESTART"),
       ]
     ]);
 
@@ -170,7 +170,7 @@ Signals Enabled: ${state.signalingEnabled ? "YES" : "NO"}
 
   /* ===============================
       ADMIN ACTIONS
-  =============================== */
+  ================================ */
   async handleAdminAction(chatId, action) {
     const state = getState();
 
@@ -192,7 +192,7 @@ Signals Enabled: ${state.signalingEnabled ? "YES" : "NO"}
         return this.send(chatId, "▶️ Scan resumed");
 
       case "ADMIN_STATS":
-        const stats = state.getStats();
+        const stats = state.getStatsSnapshot(); // ✅ fixed: getStats() -> getStatsSnapshot()
         return this.send(
           chatId,
           `📊 Stats
@@ -214,7 +214,7 @@ Errors: ${stats.errors}`
 
   /* ===============================
       TRADE EXECUTION
-  =============================== */
+  ================================ */
   async executeTrade(chatId, token) {
     const state = getState();
 
@@ -230,9 +230,7 @@ Errors: ${stats.errors}`
         const result = await router.executeSniper(token);
         return this.send(
           chatId,
-          result?.success
-            ? `✅ Live buy successful`
-            : `❌ Live buy failed`
+          result?.success ? `✅ Live buy successful` : `❌ Live buy failed`
         );
       }
 
@@ -245,7 +243,7 @@ Errors: ${stats.errors}`
 
   /* ===============================
       WATCH
-  =============================== */
+  ================================ */
   async handleWatch(chatId, token) {
     const state = getState();
     state.watchlist.add(token.toLowerCase());
