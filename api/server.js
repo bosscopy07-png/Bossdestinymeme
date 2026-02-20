@@ -97,6 +97,14 @@ app.get("/health", (req, res) => {
   });
 });
 
+app.get("/", (req, res) => {
+  res.json({
+    name: "BossDestiny Meme API",
+    status: "running",
+    endpoints: ["/health", "/api/signals", "/api/pairs"]
+  });
+});
+
 // --------------------------------------------------
 // GLOBAL ERROR HANDLER
 // --------------------------------------------------
@@ -121,7 +129,7 @@ export async function startServer(
     // ------------------------------------------
     // OPTIONAL: startup tasks (DB, cache, bot)
     // ------------------------------------------
-    // await startTelegramBot();
+    await startTelegramBot();
 
     const server = app.listen(normalizedPort, () => {
       logInfo(`🚀 API server running on port ${normalizedPort}`);
