@@ -123,7 +123,6 @@ export function buildSignalMessage(signal) {
 export async function sendTokenSignal(bot, chatId, signal) {
   try {
     if (!signal?.address) return;
-
     if (isPairSent(signal.address, signal.chain)) return;
 
     const message = buildSignalMessage(signal);
@@ -176,11 +175,4 @@ export async function sendAdminNotification(bot, message) {
 ====================================================== */
 export async function notifyTelegram(bot, chatId, text) {
   return send(bot, chatId, { text });
-  }
-
-async function sender(payload) {
-  console.log("Sending payload:", payload);
-  return true;
-}
-
-export default sender;
+         }
