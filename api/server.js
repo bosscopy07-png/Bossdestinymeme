@@ -6,8 +6,6 @@ import rateLimit from "express-rate-limit";
 import routes from "./routes.js";
 import config from "../config/index.js";
 import { logInfo, logError } from "../utils/logs.js";
-
-// Optional: Auto-start Telegram bot here
 import { startTelegramBot } from "../telegram/bot.js";
 
 // --------------------------------------------------
@@ -20,17 +18,13 @@ const app = express();
 // --------------------------------------------------
 app.use(
   helmet({
-    xssFilter: true,
-    noSniff: true,
-    hidePoweredBy: true,
-    frameguard: { action: "deny" },
     crossOriginResourcePolicy: false,
     crossOriginEmbedderPolicy: false
   })
 );
 
 // --------------------------------------------------
-// CORS CONFIGURATION
+// CORS
 // --------------------------------------------------
 app.use(
   cors({
@@ -41,122 +35,95 @@ app.use(
 );
 
 // --------------------------------------------------
-// JSON PARSER WITH ERROR HANDLING
+// JSON PARSER
 // --------------------------------------------------
 app.use(
   express.json({
-    limit: "2mb",
-    strict: false,
-    verify: (req, res, buf) => {
-      try {
-        JSON.parse(buf.toString());
-      } catch (_) {
-        throw new Error("INVALID_JSON_PAYLOAD");
-      }
-    }
+    limit: "2mb"
   })
 );
 
 // --------------------------------------------------
-// RATE LIMITING (ANTI-BOT / DDOS)
+// RATE LIMITING
 // --------------------------------------------------
 app.use(
   rateLimit({
-    windowMs: 10 * 1000, // 10 seconds
+    windowMs: 10 * 1000,
     max: 120,
-    message: { error: "too_many_requests" },
     standardHeaders: true,
     legacyHeaders: false
   })
 );
 
 // --------------------------------------------------
-// REQUEST LOGGER (DEV MODE ONLY)
+// DEV LOGGER
 // --------------------------------------------------
 if (config.NODE_ENV === "development") {
-  app.use((req, res, next) => {
+  app.use((req, _res, next) => {
     logInfo(`HTTP ${req.method} ${req.originalUrl}`);
     next();
   });
 }
 
 // --------------------------------------------------
-// MAIN ROUTES
+// ROUTES
 // --------------------------------------------------
 app.use("/api", routes);
 
 // --------------------------------------------------
-// HEALTHCHECK ROUTES
+// HEALTHCHECK
 // --------------------------------------------------
-app.get("/health", (req, res) => {
+app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     uptime: process.uptime(),
-    timestamp: Date.now(),
-    env: config.NODE_ENV || "unknown"
+    timestamp: Date.now()
   });
 });
 
-app.get("/", (req, res) => {
-  res.json({
-    name: "BossDestiny Meme API",
-    status: "running",
-    endpoints: ["/health", "/api/signals", "/api/pairs"]
-  });
+app.get("/", (_req, res) => {
+  res.send("BossDestiny Meme API — running");
 });
 
 // --------------------------------------------------
-// GLOBAL ERROR HANDLER
+// ERROR HANDLER
 // --------------------------------------------------
-app.use((err, req, res, next) => {
-  logError("API ERROR → " + (err?.stack || err?.message || err));
-
-  res.status(err?.status || 500).json({
-    error: "internal_error",
-    message: config.NODE_ENV === "development" ? err.message : undefined
-  });
+app.use((err, _req, res, _next) => {
+  logError("API ERROR →", err);
+  res.status(500).json({ error: "internal_error" });
 });
 
 // --------------------------------------------------
-// SERVER START FUNCTION
+// SERVER START (RENDER-SAFE)
 // --------------------------------------------------
-export async function startServer(port = config.API?.PORT || 5000) {
-  const normalizedPort = Number(port);
+let serverStarted = false;
 
-  try {
-    // Optional: start Telegram bot
-    await startTelegramBot();
+export async function startServer() {
+  if (serverStarted) return;
+  serverStarted = true;
 
-    // Start Express server
-    const server = app.listen(normalizedPort, () => {
-      logInfo(`🚀 API server running on port ${normalizedPort}`);
-    });
+  const PORT = Number(process.env.PORT);
 
-    // Graceful shutdown
-    const shutdown = (signal) => {
-      logInfo(`⚠ Received ${signal}. Shutting down server...`);
-      server.close(() => {
-        logInfo("Server closed. Exiting process.");
-        process.exit(0);
-      });
-    };
-
-    ["SIGINT", "SIGTERM"].forEach((sig) =>
-      process.on(sig, () => shutdown(sig))
-    );
-
-    return app;
-  } catch (err) {
-    logError("❌ Failed to start server:", err);
-    process.exit(1);
+  if (!PORT) {
+    throw new Error("❌ process.env.PORT is required (Render/Docker)");
   }
+
+  // Start Telegram bot ONCE
+  await startTelegramBot();
+
+  app.listen(PORT, "0.0.0.0", () => {
+    logInfo(`🚀 API server listening on port ${PORT}`);
+  });
 }
 
 // --------------------------------------------------
-// AUTO-START WHEN RUN DIRECTLY
+// AUTO START (ONLY WHEN RUN DIRECTLY)
 // --------------------------------------------------
-if (import.meta.url.endsWith("/api/server.js")) {
-  startServer(process.env.PORT || config.API?.PORT || 5000);
+if (process.argv[1]?.includes("api/server.js")) {
+  startServer().catch(err => {
+    logError("Startup failed", err);
+    process.exit(1);
+  });
 }
 
 export default app;
