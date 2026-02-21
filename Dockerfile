@@ -5,7 +5,6 @@ FROM node:20-slim AS builder
 
 WORKDIR /app
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     build-essential \
@@ -13,17 +12,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy package files
 COPY package.json package-lock.json* ./
-
-# Install dependencies
 RUN npm install --legacy-peer-deps
 
-# Copy full source
 COPY . .
-
-# Build (if needed)
-RUN npm run build || echo "No build script"
+RUN npm run build || echo "No build step"
 
 # =====================================================================
 # STAGE 2 — RUNTIME
@@ -32,25 +25,20 @@ FROM node:20-slim AS runtime
 
 WORKDIR /app
 
-# Create safe user
 RUN addgroup --system appgroup && adduser --system appuser --ingroup appgroup
 
-# Copy dependencies + app
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app ./
+COPY --from=builder /app /app
 
-# Logs directory
-RUN mkdir -p /app/logs && chown -R appuser:appgroup /app/logs
-
+RUN mkdir -p /app/logs && chown -R appuser:appgroup /app
 USER appuser
 
-ENV PORT=5000
-EXPOSE 5000
+ENV NODE_ENV=production
 ENV TZ=Africa/Lagos
 
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-  CMD node -e "process.exit(require('fs').existsSync('./package.json') ? 0 : 1)"
+# ❌ DO NOT SET PORT
+# ❌ DO NOT EXPOSE A FIXED PORT
 
-# Start the app without PM2
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+  CMD node -e "require('http').get('http://localhost:' + process.env.PORT + '/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+
 CMD ["node", "api/server.js"]
