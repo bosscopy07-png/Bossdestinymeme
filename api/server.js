@@ -109,7 +109,7 @@ export async function startServer() {
   }
 
   // Start Telegram bot ONCE
-  await startTelegramBot();
+  //await startTelegramBot();
 
   app.listen(PORT, "0.0.0.0", () => {
     logInfo(`🚀 API server listening on port ${PORT}`);
